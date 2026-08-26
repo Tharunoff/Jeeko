@@ -1,0 +1,11 @@
+node_modules/
+dist/
+build/
+.expo/
+.expo-shared/
+*.log
+.env
+.env.local
+web-build/
+.DS_Store
+coverage/

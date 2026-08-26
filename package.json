@@ -1,0 +1,12 @@
+{
+  "name": "personalos",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "npm run test -w packages/core",
+    "test:watch": "npm run test:watch -w packages/core"
+  }
+}
