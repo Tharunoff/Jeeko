@@ -9,3 +9,5 @@ build/
 web-build/
 .DS_Store
 coverage/
+*.keystore
+credentials.json

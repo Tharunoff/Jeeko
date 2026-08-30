@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { Modal, SafeAreaView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import React, { useRef, useState } from "react";
+import { Animated, Modal, SafeAreaView, StatusBar, StyleSheet, Text, View } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { AppStateProvider } from "./src/state/AppState";
 import { HomeScreen } from "./src/screens/HomeScreen";
@@ -10,6 +10,7 @@ import { ReviewScreen } from "./src/screens/ReviewScreen";
 import { ChatScreen } from "./src/screens/ChatScreen";
 import { SettingsScreen } from "./src/screens/SettingsScreen";
 import { CalendarEventsEditor } from "./src/components/CalendarEventsEditor";
+import { PressableScale } from "./src/components/PressableScale";
 import { Colors } from "./src/theme/colors";
 
 type Tab = "home" | "week" | "goals" | "tasks" | "review";
@@ -28,51 +29,64 @@ function MainNavigator() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
 
+  const fade = useRef(new Animated.Value(1)).current;
+
+  function selectTab(next: Tab) {
+    if (next === tab) return;
+    fade.setValue(0);
+    setTab(next);
+    Animated.timing(fade, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+  }
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor={Colors.bg} />
 
-      {/* Top header bar */}
+      {/* Top header bar — clean, minimal */}
       <View style={styles.topBar}>
-        <Text style={styles.topBarTitle}>PersonalOS</Text>
-        <View style={{ flexDirection: "row", gap: 8 }}>
-          <TouchableOpacity style={styles.settingsButton} onPress={() => setCalendarOpen(true)}>
-            <Feather name="calendar" size={17} color={Colors.textSecondary} />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.settingsButton} onPress={() => setSettingsOpen(true)}>
-            <Feather name="settings" size={17} color={Colors.textSecondary} />
-          </TouchableOpacity>
+        <Text style={styles.topBarTitle}>Jeeko</Text>
+        <View style={styles.topBarActions}>
+          <PressableScale onPress={() => setCalendarOpen(true)} haptic="light" style={styles.topBarButton}>
+            <Feather name="calendar" size={20} color={Colors.textSecondary} />
+          </PressableScale>
+          <PressableScale onPress={() => setSettingsOpen(true)} haptic="light" style={styles.topBarButton}>
+            <Feather name="settings" size={20} color={Colors.textSecondary} />
+          </PressableScale>
         </View>
       </View>
 
       {/* Screen content */}
-      <View style={styles.body}>
+      <Animated.View style={[styles.body, { opacity: fade }]}>
         {tab === "home" && <HomeScreen onOpenChat={() => setChatOpen(true)} />}
         {tab === "week" && <WeekScreen />}
         {tab === "goals" && <GoalsScreen />}
         {tab === "tasks" && <TasksScreen />}
         {tab === "review" && <ReviewScreen />}
-      </View>
+      </Animated.View>
 
-      {/* Bottom tab bar */}
+      {/* Bottom tab bar — Apple-style with labels */}
       <View style={styles.tabBar}>
-        {TABS.map((t) => (
-          <TouchableOpacity
-            key={t.key}
-            style={[styles.tabButton, tab === t.key && styles.tabButtonActive]}
-            onPress={() => setTab(t.key)}
-          >
-            <Feather
-              name={t.icon}
-              size={19}
-              color={tab === t.key ? Colors.accent : Colors.textMuted}
-              style={styles.tabIcon}
-            />
-            <Text style={[styles.tabLabel, tab === t.key && styles.tabLabelActive]}>
-              {t.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
+        {TABS.map((t) => {
+          const isActive = tab === t.key;
+          return (
+            <PressableScale
+              key={t.key}
+              style={styles.tabButton}
+              onPress={() => selectTab(t.key)}
+              haptic="selection"
+              activeScale={0.88}
+            >
+              <Feather
+                name={t.icon}
+                size={22}
+                color={isActive ? Colors.accent : Colors.textMuted}
+              />
+              <Text style={[styles.tabLabel, isActive && styles.tabLabelActive]}>
+                {t.label}
+              </Text>
+            </PressableScale>
+          );
+        })}
       </View>
 
       {/* Chat modal */}
@@ -103,47 +117,59 @@ export default function App() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.bg },
+
+  // Header — clean, no borders
   topBar: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border
+    paddingVertical: 12
   },
   topBarTitle: {
-    color: Colors.accent,
-    fontSize: 18,
-    fontWeight: "800",
-    letterSpacing: -0.3
+    color: Colors.textPrimary,
+    fontSize: 20,
+    fontWeight: "700",
+    letterSpacing: -0.4
   },
-  settingsButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: Colors.bgCard,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: Colors.border
-  },
-  body: { flex: 1 },
-  tabBar: {
+  topBarActions: {
     flexDirection: "row",
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Colors.border,
-    backgroundColor: Colors.bgCard,
-    paddingBottom: 4
+    alignItems: "center",
+    gap: 4
   },
-  tabButton: {
-    flex: 1,
-    paddingVertical: 8,
+  topBarButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: "center",
     justifyContent: "center"
   },
-  tabButtonActive: {},
-  tabIcon: { marginBottom: 2 },
-  tabLabel: { color: Colors.textMuted, fontSize: 11, fontWeight: "600" },
-  tabLabelActive: { color: Colors.accent }
+
+  body: { flex: 1 },
+
+  // Tab bar — Apple style with labels
+  tabBar: {
+    flexDirection: "row",
+    backgroundColor: "rgba(28, 28, 30, 0.92)",
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.separator,
+    paddingTop: 6,
+    paddingBottom: 2
+  },
+  tabButton: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 4,
+    gap: 2
+  },
+  tabLabel: {
+    color: Colors.textMuted,
+    fontSize: 10,
+    fontWeight: "500"
+  },
+  tabLabelActive: {
+    color: Colors.accent,
+    fontWeight: "600"
+  }
 });

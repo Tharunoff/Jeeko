@@ -6,6 +6,7 @@ import type {
   MemoryEntry,
   PlannedBlock,
   Project,
+  Reminder,
   Task,
   TimeLog,
   UserProfile
@@ -27,6 +28,7 @@ export class InMemoryStore implements DataStore {
   private decisions: DecisionLog[] = [];
   private dailyReviews: DailyReview[] = [];
   private preferences = new Map<string, string>();
+  private reminders = new Map<string, Reminder>();
   private timezone = "UTC";
 
   async getUser(): Promise<UserProfile | undefined> {
@@ -144,5 +146,15 @@ export class InMemoryStore implements DataStore {
   }
   async setPreference(key: string, value: string): Promise<void> {
     this.preferences.set(key, value);
+  }
+
+  async listReminders(): Promise<Reminder[]> {
+    return [...this.reminders.values()];
+  }
+  async saveReminder(reminder: Reminder): Promise<void> {
+    this.reminders.set(reminder.id, reminder);
+  }
+  async deleteReminder(id: string): Promise<void> {
+    this.reminders.delete(id);
   }
 }

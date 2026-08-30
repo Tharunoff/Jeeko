@@ -5,7 +5,6 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
   View
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
@@ -19,7 +18,8 @@ import {
   type TimeLog
 } from "@personalos/core";
 import { useAppState } from "../state/AppState";
-import { Colors } from "../theme/colors";
+import { Colors, CardShadow } from "../theme/colors";
+import { PressableScale } from "../components/PressableScale";
 
 export function ReviewScreen() {
   const { store, user, ready, version, refresh } = useAppState();
@@ -108,7 +108,7 @@ export function ReviewScreen() {
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={{ padding: 20, paddingBottom: 50 }}>
-      <Text style={styles.title}>Daily Review</Text>
+      <Text style={styles.title}>Review</Text>
       <Text style={styles.subtitle}>Track actual time to improve estimates</Text>
 
       {/* Today stats */}
@@ -159,7 +159,7 @@ export function ReviewScreen() {
                   ]}
                 />
               </View>
-              <View style={[styles.barTrack, { marginTop: 3 }]}>
+              <View style={[styles.barTrack, { marginTop: 4 }]}>
                 <View
                   style={[
                     styles.barActual,
@@ -186,67 +186,72 @@ export function ReviewScreen() {
       {completedToday.length > 0 && (
         <>
           <Text style={styles.sectionLabel}>LOG ACTUAL TIME</Text>
-          {completedToday.map((t) => {
-            const hasLog = todayLogs.some((l) => l.taskId === t.id);
-            return (
-              <View key={t.id} style={styles.logCard}>
-                <View style={styles.logHeader}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.logTitle}>{t.title}</Text>
-                    <Text style={styles.logEstimate}>
-                      estimated {formatMinutes(t.estimatedMinutes)}
-                    </Text>
-                  </View>
-                  {hasLog ? (
-                    <View style={styles.loggedBadge}>
-                      <Feather name="check" size={11} color={Colors.success} />
-                      <Text style={styles.loggedText}>logged</Text>
+          <View style={styles.logGroup}>
+            {completedToday.map((t, idx) => {
+              const hasLog = todayLogs.some((l) => l.taskId === t.id);
+              return (
+                <View key={t.id}>
+                  <View style={styles.logCard}>
+                    <View style={styles.logHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.logTitle}>{t.title}</Text>
+                        <Text style={styles.logEstimate}>
+                          estimated {formatMinutes(t.estimatedMinutes)}
+                        </Text>
+                      </View>
+                      {hasLog ? (
+                        <View style={styles.loggedBadge}>
+                          <Feather name="check" size={11} color={Colors.success} />
+                          <Text style={styles.loggedText}>logged</Text>
+                        </View>
+                      ) : null}
                     </View>
-                  ) : null}
-                </View>
 
-                {loggingTaskId === t.id ? (
-                  <View style={styles.logForm}>
-                    <TextInput
-                      style={styles.input}
-                      placeholder="Actual minutes spent"
-                      placeholderTextColor={Colors.textMuted}
-                      value={actualMinutesInput}
-                      onChangeText={setActualMinutesInput}
-                      keyboardType="number-pad"
-                      autoFocus
-                    />
-                    <View style={styles.formActions}>
-                      <TouchableOpacity onPress={() => setLoggingTaskId(null)}>
-                        <Text style={styles.cancelText}>Cancel</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity style={styles.logButton} onPress={() => logTime(t)}>
-                        <Text style={styles.logButtonText}>Log</Text>
-                      </TouchableOpacity>
-                    </View>
+                    {loggingTaskId === t.id ? (
+                      <View style={styles.logForm}>
+                        <TextInput
+                          style={styles.input}
+                          placeholder="Actual minutes spent"
+                          placeholderTextColor={Colors.textMuted}
+                          value={actualMinutesInput}
+                          onChangeText={setActualMinutesInput}
+                          keyboardType="number-pad"
+                          autoFocus
+                        />
+                        <View style={styles.formActions}>
+                          <PressableScale onPress={() => setLoggingTaskId(null)} haptic="light">
+                            <Text style={styles.cancelText}>Cancel</Text>
+                          </PressableScale>
+                          <PressableScale style={styles.logButton} onPress={() => logTime(t)} haptic="medium">
+                            <Text style={styles.logButtonText}>Log</Text>
+                          </PressableScale>
+                        </View>
+                      </View>
+                    ) : !hasLog ? (
+                      <PressableScale
+                        style={styles.logTimeButton}
+                        onPress={() => {
+                          setLoggingTaskId(t.id);
+                          setActualMinutesInput(String(t.estimatedMinutes));
+                        }}
+                        haptic="light"
+                      >
+                        <Text style={styles.logTimeText}>Log time</Text>
+                      </PressableScale>
+                    ) : null}
                   </View>
-                ) : !hasLog ? (
-                  <TouchableOpacity
-                    style={styles.logTimeButton}
-                    onPress={() => {
-                      setLoggingTaskId(t.id);
-                      setActualMinutesInput(String(t.estimatedMinutes));
-                    }}
-                  >
-                    <Text style={styles.logTimeText}>Log time</Text>
-                  </TouchableOpacity>
-                ) : null}
-              </View>
-            );
-          })}
+                  {idx < completedToday.length - 1 && <View style={styles.logSeparator} />}
+                </View>
+              );
+            })}
+          </View>
         </>
       )}
 
       {/* Create daily review */}
-      <TouchableOpacity style={styles.reviewButton} onPress={createDailyReview}>
-        <Feather name="clipboard" size={15} color={Colors.textPrimary} />
+      <PressableScale style={styles.reviewButton} onPress={createDailyReview} haptic="medium">
         <Text style={styles.reviewButtonText}>Generate Daily Review</Text>
-      </TouchableOpacity>
+      </PressableScale>
 
       {/* Latest review */}
       {latestReview && (
@@ -256,13 +261,13 @@ export function ReviewScreen() {
             <Text style={styles.reviewDate}>{latestReview.date}</Text>
             <View style={styles.reviewStats}>
               <View style={styles.reviewStatRow}>
-                <Feather name="check-circle" size={13} color={Colors.success} />
+                <Feather name="check-circle" size={14} color={Colors.success} />
                 <Text style={styles.reviewStat}>{latestReview.completedCount} done</Text>
-                <Feather name="x-circle" size={13} color={Colors.danger} style={{ marginLeft: 10 }} />
+                <Feather name="x-circle" size={14} color={Colors.danger} style={{ marginLeft: 12 }} />
                 <Text style={styles.reviewStat}>{latestReview.incompleteCount} missed</Text>
               </View>
               <View style={styles.reviewStatRow}>
-                <Feather name="bar-chart-2" size={13} color={Colors.textMuted} />
+                <Feather name="bar-chart-2" size={14} color={Colors.textMuted} />
                 <Text style={styles.reviewStat}>
                   Est {formatMinutes(latestReview.estimatedTotalMinutes)} · Act{" "}
                   {formatMinutes(latestReview.actualTotalMinutes)}
@@ -290,29 +295,33 @@ export function ReviewScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: Colors.bg },
-  title: { color: Colors.textPrimary, fontSize: 24, fontWeight: "800", letterSpacing: -0.3 },
-  subtitle: { color: Colors.textMuted, fontSize: 13, marginTop: 4, marginBottom: 16 },
+  title: {
+    color: Colors.textPrimary,
+    fontSize: 34,
+    fontWeight: "700",
+    letterSpacing: 0.37
+  },
+  subtitle: { color: Colors.textMuted, fontSize: 14, marginTop: 4, marginBottom: 20 },
 
   // Stats card
   statsCard: {
     backgroundColor: Colors.bgCard,
-    borderRadius: 20,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    marginBottom: 12
+    borderRadius: 16,
+    padding: 22,
+    marginBottom: 14,
+    ...CardShadow
   },
   statsRow: { flexDirection: "row", alignItems: "center" },
   statItem: { flex: 1, alignItems: "center" },
-  statDivider: { width: 1, height: 32, backgroundColor: Colors.border },
-  statValue: { color: Colors.textPrimary, fontSize: 22, fontWeight: "800" },
-  statLabel: { color: Colors.textMuted, fontSize: 11, marginTop: 4 },
+  statDivider: { width: StyleSheet.hairlineWidth, height: 36, backgroundColor: Colors.separator },
+  statValue: { color: Colors.textPrimary, fontSize: 24, fontWeight: "700", fontVariant: ["tabular-nums"] },
+  statLabel: { color: Colors.textMuted, fontSize: 12, marginTop: 4 },
 
   // Accuracy
-  accuracySection: { marginTop: 16 },
-  accuracyHeader: { flexDirection: "row", justifyContent: "space-between", marginBottom: 8 },
-  accuracyLabel: { color: Colors.textMuted, fontSize: 13 },
-  accuracyValue: { fontSize: 14, fontWeight: "700" },
+  accuracySection: { marginTop: 18 },
+  accuracyHeader: { flexDirection: "row", justifyContent: "space-between", marginBottom: 10 },
+  accuracyLabel: { color: Colors.textMuted, fontSize: 14 },
+  accuracyValue: { fontSize: 15, fontWeight: "700", fontVariant: ["tabular-nums"] },
   dualBar: {},
   barTrack: {
     height: 8,
@@ -322,117 +331,115 @@ const styles = StyleSheet.create({
   },
   barEstimated: { height: 8, borderRadius: 4, backgroundColor: Colors.accent },
   barActual: { height: 8, borderRadius: 4, backgroundColor: Colors.success },
-  barLegend: { flexDirection: "row", gap: 16, marginTop: 8 },
-  legendItem: { flexDirection: "row", alignItems: "center", gap: 4 },
+  barLegend: { flexDirection: "row", gap: 18, marginTop: 10 },
+  legendItem: { flexDirection: "row", alignItems: "center", gap: 6 },
   legendDot: { width: 8, height: 8, borderRadius: 4 },
-  legendText: { color: Colors.textMuted, fontSize: 11 },
+  legendText: { color: Colors.textMuted, fontSize: 12 },
 
   sectionLabel: {
     color: Colors.textMuted,
-    fontSize: 12,
-    fontWeight: "700",
-    letterSpacing: 1.5,
-    marginTop: 20,
+    fontSize: 13,
+    letterSpacing: -0.08,
+    textTransform: "uppercase",
+    marginTop: 24,
     marginBottom: 10
   },
 
-  // Log cards
-  logCard: {
+  // Log cards — grouped
+  logGroup: {
     backgroundColor: Colors.bgCard,
     borderRadius: 14,
-    padding: 14,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: Colors.border
+    paddingHorizontal: 16,
+    ...CardShadow
+  },
+  logCard: {
+    paddingVertical: 14
+  },
+  logSeparator: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: Colors.separator
   },
   logHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
-  logTitle: { color: Colors.textPrimary, fontSize: 14, fontWeight: "600" },
-  logEstimate: { color: Colors.textMuted, fontSize: 12, marginTop: 3 },
+  logTitle: { color: Colors.textPrimary, fontSize: 15, fontWeight: "600" },
+  logEstimate: { color: Colors.textMuted, fontSize: 13, marginTop: 3 },
   loggedBadge: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
-    backgroundColor: "rgba(34, 197, 94, 0.15)",
-    borderRadius: 8,
-    paddingVertical: 3,
-    paddingHorizontal: 8
+    backgroundColor: "rgba(48, 209, 88, 0.12)",
+    borderRadius: 10,
+    paddingVertical: 4,
+    paddingHorizontal: 10
   },
-  loggedText: { color: Colors.success, fontSize: 11, fontWeight: "600" },
+  loggedText: { color: Colors.success, fontSize: 12, fontWeight: "600" },
 
-  logForm: { marginTop: 10 },
+  logForm: { marginTop: 12 },
   input: {
     backgroundColor: Colors.bgCardAlt,
     color: Colors.textPrimary,
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    fontSize: 15,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    marginBottom: 8
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+    marginBottom: 10
   },
   formActions: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center"
   },
-  cancelText: { color: Colors.textMuted, fontSize: 14 },
+  cancelText: { color: Colors.textMuted, fontSize: 15, fontWeight: "500" },
   logButton: {
     backgroundColor: Colors.accent,
-    borderRadius: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 18
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 20
   },
-  logButtonText: { color: "#fff", fontWeight: "600", fontSize: 13 },
-  logTimeButton: { marginTop: 8 },
-  logTimeText: { color: Colors.accent, fontSize: 13, fontWeight: "600" },
+  logButtonText: { color: "#fff", fontWeight: "600", fontSize: 14 },
+  logTimeButton: { marginTop: 10 },
+  logTimeText: { color: Colors.accent, fontSize: 14, fontWeight: "600" },
 
-  // Review button
+  // Review button — full-width prominent
   reviewButton: {
-    flexDirection: "row",
-    justifyContent: "center",
-    gap: 8,
-    backgroundColor: Colors.bgCard,
-    borderRadius: 16,
-    paddingVertical: 14,
+    backgroundColor: Colors.accent,
+    borderRadius: 14,
+    paddingVertical: 16,
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: Colors.border,
-    marginTop: 12
+    marginTop: 16
   },
-  reviewButtonText: { color: Colors.textPrimary, fontWeight: "600", fontSize: 15 },
+  reviewButtonText: { color: "#fff", fontWeight: "700", fontSize: 16 },
 
   // Review card
   reviewCard: {
     backgroundColor: Colors.bgCard,
     borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: Colors.border
+    padding: 18,
+    ...CardShadow
   },
-  reviewDate: { color: Colors.accent, fontSize: 14, fontWeight: "700", marginBottom: 8 },
-  reviewStats: { gap: 6 },
-  reviewStatRow: { flexDirection: "row", alignItems: "center", gap: 6 },
-  reviewStat: { color: Colors.textSecondary, fontSize: 13, lineHeight: 19 },
+  reviewDate: { color: Colors.accent, fontSize: 15, fontWeight: "700", marginBottom: 10 },
+  reviewStats: { gap: 8 },
+  reviewStatRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  reviewStat: { color: Colors.textSecondary, fontSize: 14, lineHeight: 20 },
   issueBox: {
-    marginTop: 12,
-    backgroundColor: "rgba(245, 158, 11, 0.08)",
-    borderRadius: 10,
-    padding: 10
+    marginTop: 14,
+    backgroundColor: "rgba(255, 214, 10, 0.06)",
+    borderRadius: 12,
+    padding: 12
   },
   issueLabel: {
     color: Colors.textMuted,
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 1,
+    fontSize: 11,
+    fontWeight: "600",
+    letterSpacing: 0.5,
+    textTransform: "uppercase",
     marginBottom: 4
   },
-  issueText: { color: Colors.warning, fontSize: 13, lineHeight: 18 },
+  issueText: { color: Colors.warning, fontSize: 14, lineHeight: 20 },
   adjustBox: {
-    marginTop: 8,
-    backgroundColor: "rgba(99, 102, 241, 0.08)",
-    borderRadius: 10,
-    padding: 10
+    marginTop: 10,
+    backgroundColor: "rgba(34, 211, 238, 0.06)",
+    borderRadius: 12,
+    padding: 12
   },
-  adjustText: { color: Colors.accent, fontSize: 13, lineHeight: 18 }
+  adjustText: { color: Colors.accent, fontSize: 14, lineHeight: 20 }
 });

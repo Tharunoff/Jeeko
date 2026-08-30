@@ -11,6 +11,7 @@ import type {
   MemoryKind,
   Project,
   ProjectStatus,
+  Reminder,
   Task,
   TaskStatus,
   TimeLog,
@@ -804,6 +805,75 @@ const saveMemory: ToolDefinition<z.infer<typeof saveMemorySchema>> = {
 };
 
 // ---------------------------------------------------------------------------
+// create_reminder / list_reminders / cancel_reminder
+// ---------------------------------------------------------------------------
+// A standalone alarm/reminder — "remind me to drink water at 5pm", "set an
+// alarm for 7am" — deliberately independent of the task engine: it's not a
+// task with capacity/priority, just a point in time to notify at. This tool
+// only persists the reminder; the mobile app turns each un-fired one into a
+// real local notification (see notifications/scheduler.ts) whenever the store
+// changes, the same way plan-derived notifications already get scheduled.
+const createReminderSchema = z.object({
+  title: z.string().min(1),
+  triggerAt: z.string()
+});
+const createReminder: ToolDefinition<z.infer<typeof createReminderSchema>> = {
+  name: "create_reminder",
+  description:
+    "Sets a standalone alarm/reminder for a specific point in time (not a task — no capacity or priority involved). Use for things like \"remind me to X at 5pm\" or \"set an alarm for 7am tomorrow\". triggerAt must be an absolute ISO 8601 date-time — resolve relative phrases like \"in 10 minutes\" or \"tomorrow at 7am\" against the current time given in context yourself before calling this.",
+  parameters: {
+    type: "object",
+    properties: {
+      title: { type: "string" },
+      triggerAt: { type: "string", format: "date-time" }
+    },
+    required: ["title", "triggerAt"]
+  },
+  schema: createReminderSchema,
+  handler: async (args, ctx) => {
+    const triggerAt = new Date(args.triggerAt);
+    if (Number.isNaN(triggerAt.getTime())) throw new Error(`"${args.triggerAt}" isn't a valid date-time.`);
+    const reminder: Reminder = {
+      id: generateId("reminder"),
+      title: args.title,
+      triggerAt,
+      fired: false,
+      createdAt: ctx.now
+    };
+    await ctx.store.saveReminder(reminder);
+    return { reminder };
+  }
+};
+
+const listRemindersSchema = z.object({});
+const listReminders: ToolDefinition<z.infer<typeof listRemindersSchema>> = {
+  name: "list_reminders",
+  description: "Lists all reminders/alarms that haven't fired yet.",
+  parameters: { type: "object", properties: {} },
+  schema: listRemindersSchema,
+  handler: async (_args, ctx) => {
+    const all = await ctx.store.listReminders();
+    return { reminders: all.filter((r) => !r.fired) };
+  }
+};
+
+const cancelReminderSchema = z.object({ id: z.string() });
+const cancelReminder: ToolDefinition<z.infer<typeof cancelReminderSchema>> = {
+  name: "cancel_reminder",
+  description: "Cancels/deletes a reminder or alarm by id.",
+  parameters: {
+    type: "object",
+    properties: { id: { type: "string" } },
+    required: ["id"]
+  },
+  schema: cancelReminderSchema,
+  handler: async (args, ctx) => {
+    await ctx.store.deleteReminder(args.id);
+    return { deleted: args.id };
+  }
+};
+
+// ---------------------------------------------------------------------------
 
 export const ALL_TOOLS: ToolDefinition<any>[] = [
   createTask,
@@ -827,7 +897,10 @@ export const ALL_TOOLS: ToolDefinition<any>[] = [
   getNextActionTool,
   recordActualDuration,
   searchMemory,
-  saveMemory
+  saveMemory,
+  createReminder,
+  listReminders,
+  cancelReminder
 ];
 
 export function toolDeclarations(): ToolDeclaration[] {

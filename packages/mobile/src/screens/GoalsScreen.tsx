@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
-import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { executeTool, type Goal, type Project } from "@personalos/core";
 import { useAppState } from "../state/AppState";
-import { Colors } from "../theme/colors";
+import { Colors, CardShadow } from "../theme/colors";
+import { PressableScale } from "../components/PressableScale";
 
 export function GoalsScreen() {
   const { store, ready, version, refresh } = useAppState();
@@ -43,7 +44,7 @@ export function GoalsScreen() {
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={{ padding: 20, paddingBottom: 50 }}>
-      <Text style={styles.title}>Goals & Projects</Text>
+      <Text style={styles.title}>Goals</Text>
       <Text style={styles.subtitle}>
         {goals.filter((g) => g.status === "active").length} active goals ·{" "}
         {projects.filter((p) => p.status === "active").length} projects
@@ -60,7 +61,7 @@ export function GoalsScreen() {
                 <Text style={styles.goalTitle}>{g.title}</Text>
                 <View style={styles.goalMeta}>
                   <View style={[styles.statusBadge, g.status === "active" && styles.statusActive]}>
-                    <Text style={styles.statusText}>{g.status}</Text>
+                    <Text style={[styles.statusText, g.status === "active" && styles.statusTextActive]}>{g.status}</Text>
                   </View>
                   <Text style={styles.weightText}>weight: {g.priorityWeight.toFixed(1)}</Text>
                 </View>
@@ -91,22 +92,24 @@ export function GoalsScreen() {
             {/* Projects under this goal */}
             {goalProjects.length > 0 && (
               <View style={styles.projectList}>
-                {goalProjects.map((p) => (
-                  <View key={p.id} style={styles.projectRow}>
-                    <View style={styles.projectConnector} />
-                    <View style={styles.projectContent}>
-                      <Text style={styles.projectTitle}>{p.title}</Text>
-                      <View style={styles.projectMeta}>
-                        <View style={[styles.statusBadge, p.status === "active" && styles.statusActive]}>
-                          <Text style={styles.statusText}>{p.status}</Text>
+                {goalProjects.map((p, idx) => (
+                  <View key={p.id}>
+                    <View style={styles.projectRow}>
+                      <View style={styles.projectContent}>
+                        <Text style={styles.projectTitle}>{p.title}</Text>
+                        <View style={styles.projectMeta}>
+                          <View style={[styles.statusBadge, p.status === "active" && styles.statusActive]}>
+                            <Text style={[styles.statusText, p.status === "active" && styles.statusTextActive]}>{p.status}</Text>
+                          </View>
+                          {p.deadline && (
+                            <Text style={styles.deadlineText}>
+                              due {new Date(p.deadline).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                            </Text>
+                          )}
                         </View>
-                        {p.deadline && (
-                          <Text style={styles.deadlineText}>
-                            due {new Date(p.deadline).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
-                          </Text>
-                        )}
                       </View>
                     </View>
+                    {idx < goalProjects.length - 1 && <View style={styles.projectSeparator} />}
                   </View>
                 ))}
               </View>
@@ -124,24 +127,25 @@ export function GoalsScreen() {
                   autoFocus
                 />
                 <View style={styles.formActions}>
-                  <TouchableOpacity onPress={() => setAddingProject(null)}>
+                  <PressableScale onPress={() => setAddingProject(null)} haptic="light">
                     <Text style={styles.cancelText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.smallButton} onPress={() => addProject(g.id)}>
+                  </PressableScale>
+                  <PressableScale style={styles.smallButton} onPress={() => addProject(g.id)} haptic="medium">
                     <Text style={styles.smallButtonText}>Add</Text>
-                  </TouchableOpacity>
+                  </PressableScale>
                 </View>
               </View>
             ) : (
-              <TouchableOpacity
+              <PressableScale
                 style={styles.addProjectButton}
                 onPress={() => {
                   setAddingProject(g.id);
                   setProjectTitle("");
                 }}
+                haptic="light"
               >
                 <Text style={styles.addProjectText}>+ Add project</Text>
-              </TouchableOpacity>
+              </PressableScale>
             )}
           </View>
         );
@@ -159,18 +163,18 @@ export function GoalsScreen() {
             autoFocus
           />
           <View style={styles.formActions}>
-            <TouchableOpacity onPress={() => setAddingGoal(false)}>
+            <PressableScale onPress={() => setAddingGoal(false)} haptic="light">
               <Text style={styles.cancelText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.saveButton} onPress={addGoal}>
+            </PressableScale>
+            <PressableScale style={styles.saveButton} onPress={addGoal} haptic="medium">
               <Text style={styles.saveButtonText}>Create Goal</Text>
-            </TouchableOpacity>
+            </PressableScale>
           </View>
         </View>
       ) : (
-        <TouchableOpacity style={styles.addButton} onPress={() => setAddingGoal(true)}>
+        <PressableScale style={styles.addButton} onPress={() => setAddingGoal(true)} haptic="light">
           <Text style={styles.addButtonText}>+ New goal</Text>
-        </TouchableOpacity>
+        </PressableScale>
       )}
     </ScrollView>
   );
@@ -178,121 +182,127 @@ export function GoalsScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: Colors.bg },
-  title: { color: Colors.textPrimary, fontSize: 24, fontWeight: "800", letterSpacing: -0.3 },
-  subtitle: { color: Colors.textMuted, fontSize: 13, marginTop: 4, marginBottom: 16 },
+  title: {
+    color: Colors.textPrimary,
+    fontSize: 34,
+    fontWeight: "700",
+    letterSpacing: 0.37
+  },
+  subtitle: { color: Colors.textMuted, fontSize: 14, marginTop: 4, marginBottom: 20 },
 
   // Goal card
   goalCard: {
     backgroundColor: Colors.bgCard,
-    borderRadius: 18,
-    padding: 18,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: Colors.border
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 14,
+    ...CardShadow
   },
   goalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
-  goalInfo: { flex: 1, marginRight: 12 },
-  goalTitle: { color: Colors.textPrimary, fontSize: 17, fontWeight: "700" },
-  goalMeta: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 },
-  weightText: { color: Colors.textMuted, fontSize: 11 },
+  goalInfo: { flex: 1, marginRight: 14 },
+  goalTitle: { color: Colors.textPrimary, fontSize: 17, fontWeight: "600", letterSpacing: -0.4 },
+  goalMeta: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 },
+  weightText: { color: Colors.textMuted, fontSize: 12 },
 
   progressCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    borderWidth: 2,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 2.5,
     borderColor: Colors.accent,
     alignItems: "center",
     justifyContent: "center"
   },
-  progressText: { color: Colors.accent, fontSize: 12, fontWeight: "700" },
+  progressText: { color: Colors.accent, fontSize: 13, fontWeight: "700", fontVariant: ["tabular-nums"] },
 
   progressTrack: {
-    height: 4,
-    borderRadius: 2,
+    height: 6,
+    borderRadius: 3,
     backgroundColor: Colors.bgCardAlt,
-    marginTop: 12,
+    marginTop: 14,
     overflow: "hidden"
   },
-  progressFill: { height: 4, borderRadius: 2 },
+  progressFill: { height: 6, borderRadius: 3 },
 
   // Status badges
   statusBadge: {
-    paddingVertical: 2,
-    paddingHorizontal: 8,
-    borderRadius: 8,
+    paddingVertical: 3,
+    paddingHorizontal: 10,
+    borderRadius: 10,
     backgroundColor: Colors.bgCardAlt
   },
-  statusActive: { backgroundColor: "rgba(34, 197, 94, 0.15)" },
+  statusActive: { backgroundColor: "rgba(48, 209, 88, 0.12)" },
   statusText: {
     color: Colors.textMuted,
-    fontSize: 10,
-    fontWeight: "700",
+    fontSize: 11,
+    fontWeight: "600",
     textTransform: "uppercase",
     letterSpacing: 0.5
   },
+  statusTextActive: {
+    color: Colors.success
+  },
 
   // Projects
-  projectList: { marginTop: 14 },
-  projectRow: { flexDirection: "row", marginBottom: 8 },
-  projectConnector: {
-    width: 2,
-    backgroundColor: Colors.border,
-    marginRight: 12,
-    marginLeft: 8,
-    borderRadius: 1
+  projectList: {
+    marginTop: 16,
+    backgroundColor: Colors.bgCardAlt,
+    borderRadius: 12,
+    paddingHorizontal: 14
   },
-  projectContent: { flex: 1, paddingVertical: 6 },
-  projectTitle: { color: Colors.textSecondary, fontSize: 14, fontWeight: "500" },
-  projectMeta: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 4 },
-  deadlineText: { color: Colors.textMuted, fontSize: 11 },
+  projectRow: { paddingVertical: 12 },
+  projectSeparator: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: Colors.separator
+  },
+  projectContent: {},
+  projectTitle: { color: Colors.textSecondary, fontSize: 15, fontWeight: "500" },
+  projectMeta: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 5 },
+  deadlineText: { color: Colors.textMuted, fontSize: 12 },
 
-  addProjectButton: { marginTop: 10 },
-  addProjectText: { color: Colors.accent, fontSize: 13, fontWeight: "600" },
+  addProjectButton: { marginTop: 12 },
+  addProjectText: { color: Colors.accent, fontSize: 14, fontWeight: "600" },
 
   // Forms
-  inlineForm: { marginTop: 12 },
+  inlineForm: { marginTop: 14 },
   input: {
     backgroundColor: Colors.bgCardAlt,
     color: Colors.textPrimary,
     borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    fontSize: 15,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    marginBottom: 10
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+    marginBottom: 12
   },
   formActions: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center"
   },
-  cancelText: { color: Colors.textMuted, fontSize: 14 },
+  cancelText: { color: Colors.textMuted, fontSize: 15, fontWeight: "500" },
   smallButton: {
     backgroundColor: Colors.accent,
-    borderRadius: 10,
-    paddingVertical: 7,
-    paddingHorizontal: 16
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 18
   },
-  smallButtonText: { color: "#fff", fontWeight: "600", fontSize: 13 },
+  smallButtonText: { color: "#fff", fontWeight: "600", fontSize: 14 },
 
   // Add goal
   addCard: {
     backgroundColor: Colors.bgCard,
-    borderRadius: 18,
-    padding: 18,
+    borderRadius: 16,
+    padding: 20,
     marginTop: 8,
-    borderWidth: 1,
-    borderColor: Colors.border
+    ...CardShadow
   },
   saveButton: {
     backgroundColor: Colors.accent,
-    borderRadius: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 20
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 22
   },
-  saveButtonText: { color: "#fff", fontWeight: "700" },
-  addButton: { alignItems: "center", paddingVertical: 14, marginTop: 8 },
-  addButtonText: { color: Colors.accent, fontWeight: "700", fontSize: 15 }
+  saveButtonText: { color: "#fff", fontWeight: "700", fontSize: 15 },
+  addButton: { alignItems: "center", paddingVertical: 16, marginTop: 8 },
+  addButtonText: { color: Colors.accent, fontWeight: "700", fontSize: 16 }
 });

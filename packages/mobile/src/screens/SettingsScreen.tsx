@@ -8,12 +8,27 @@ import {
   Switch,
   Text,
   TextInput,
-  TouchableOpacity,
   View
 } from "react-native";
+import { Feather } from "@expo/vector-icons";
+import type { Reminder } from "@personalos/core";
 import { useAppState } from "../state/AppState";
-import { Colors } from "../theme/colors";
+import { Colors, CardShadow } from "../theme/colors";
 import { SqliteDataStore } from "../db/sqliteStore";
+import { PressableScale } from "../components/PressableScale";
+import { formatClock } from "../utils/format";
+
+function formatReminderWhen(triggerAt: Date, timezone: string): string {
+  const now = new Date();
+  const dayMs = 24 * 60 * 60 * 1000;
+  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const daysAhead = Math.round((startOfDay(triggerAt) - startOfDay(now)) / dayMs);
+  const time = formatClock(triggerAt, timezone);
+  if (daysAhead === 0) return `Today, ${time}`;
+  if (daysAhead === 1) return `Tomorrow, ${time}`;
+  if (daysAhead === -1) return `Yesterday, ${time}`;
+  return `${triggerAt.toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${time}`;
+}
 
 export function SettingsScreen({ onClose }: { onClose: () => void }) {
   const { store, user, refresh } = useAppState();
@@ -23,6 +38,7 @@ export function SettingsScreen({ onClose }: { onClose: () => void }) {
   const [sleepTime, setSleepTime] = useState("23:00");
   const [offlineOnly, setOfflineOnly] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [reminders, setReminders] = useState<Reminder[]>([]);
 
   useEffect(() => {
     if (!store || !user) return;
@@ -35,7 +51,26 @@ export function SettingsScreen({ onClose }: { onClose: () => void }) {
       const offline = await store.getPreference("offline_only");
       setOfflineOnly(offline === "true");
     })();
+    loadReminders();
   }, [store, user]);
+
+  async function loadReminders() {
+    if (!store) return;
+    const all = await store.listReminders();
+    setReminders(
+      all.filter((r) => !r.fired).sort((a, b) => a.triggerAt.getTime() - b.triggerAt.getTime())
+    );
+  }
+
+  async function cancelReminder(id: string) {
+    if (!store) return;
+    await store.deleteReminder(id);
+    setReminders((prev) => prev.filter((r) => r.id !== id));
+    // Re-syncs the actual scheduled notifications (scheduleNotifications does
+    // a full cancel-and-reschedule against current DataStore state), not just
+    // the on-screen list.
+    refresh();
+  }
 
   async function resetLocalData() {
     Alert.alert(
@@ -91,9 +126,9 @@ export function SettingsScreen({ onClose }: { onClose: () => void }) {
     >
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Settings</Text>
-        <TouchableOpacity onPress={onClose}>
-          <Text style={styles.closeText}>Close</Text>
-        </TouchableOpacity>
+        <PressableScale onPress={onClose} haptic="light">
+          <Text style={styles.closeText}>Done</Text>
+        </PressableScale>
       </View>
 
       <ScrollView
@@ -104,43 +139,76 @@ export function SettingsScreen({ onClose }: { onClose: () => void }) {
         {/* Profile */}
         <Text style={styles.sectionLabel}>PROFILE</Text>
         <View style={styles.card}>
-          <Text style={styles.fieldLabel}>Name</Text>
-          <TextInput
-            style={styles.input}
-            value={name}
-            onChangeText={setName}
-            placeholder="Your name"
-            placeholderTextColor={Colors.textMuted}
-          />
-          <View style={styles.row}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.fieldLabel}>Wake time</Text>
-              <TextInput
-                style={styles.input}
-                value={wakeTime}
-                onChangeText={setWakeTime}
-                placeholder="07:00"
-                placeholderTextColor={Colors.textMuted}
-              />
-            </View>
-            <View style={{ width: 16 }} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.fieldLabel}>Sleep time</Text>
-              <TextInput
-                style={styles.input}
-                value={sleepTime}
-                onChangeText={setSleepTime}
-                placeholder="23:00"
-                placeholderTextColor={Colors.textMuted}
-              />
-            </View>
+          <View style={styles.fieldRow}>
+            <Text style={styles.fieldLabel}>Name</Text>
+            <TextInput
+              style={styles.fieldInput}
+              value={name}
+              onChangeText={setName}
+              placeholder="Your name"
+              placeholderTextColor={Colors.textMuted}
+              textAlign="right"
+            />
+          </View>
+          <View style={styles.separator} />
+          <View style={styles.fieldRow}>
+            <Text style={styles.fieldLabel}>Wake time</Text>
+            <TextInput
+              style={styles.fieldInput}
+              value={wakeTime}
+              onChangeText={setWakeTime}
+              placeholder="07:00"
+              placeholderTextColor={Colors.textMuted}
+              textAlign="right"
+            />
+          </View>
+          <View style={styles.separator} />
+          <View style={styles.fieldRow}>
+            <Text style={styles.fieldLabel}>Sleep time</Text>
+            <TextInput
+              style={styles.fieldInput}
+              value={sleepTime}
+              onChangeText={setSleepTime}
+              placeholder="23:00"
+              placeholderTextColor={Colors.textMuted}
+              textAlign="right"
+            />
           </View>
         </View>
+
+        {/* Reminders/alarms — set via Jeeko ("remind me to X at 5pm"), managed here */}
+        <Text style={styles.sectionLabel}>REMINDERS</Text>
+        {reminders.length === 0 ? (
+          <Text style={styles.sectionFooter}>
+            None set. Ask Jeeko to "remind me to X at 5pm" or "set an alarm for 7am" and it'll show up here.
+          </Text>
+        ) : (
+          <View style={styles.card}>
+            {reminders.map((r, i) => (
+              <React.Fragment key={r.id}>
+                {i > 0 && <View style={styles.separator} />}
+                <View style={styles.reminderRow}>
+                  <View style={styles.reminderText}>
+                    <Text style={styles.fieldLabel} numberOfLines={1}>
+                      {r.title}
+                    </Text>
+                    <Text style={styles.reminderWhen}>{formatReminderWhen(r.triggerAt, user?.timezone ?? "UTC")}</Text>
+                  </View>
+                  <PressableScale onPress={() => cancelReminder(r.id)} hitSlop={10} haptic="light" activeScale={0.85}>
+                    <Feather name="x-circle" size={20} color={Colors.textMuted} />
+                  </PressableScale>
+                </View>
+              </React.Fragment>
+            ))}
+          </View>
+        )}
 
         {/* AI */}
         <Text style={styles.sectionLabel}>AI ASSISTANT</Text>
         <View style={styles.card}>
-          <Text style={styles.fieldLabel}>Gemini API Key</Text>
+          <View style={styles.fieldRow}>
+            <Text style={styles.fieldLabel}>Gemini API Key</Text>
+          </View>
           <TextInput
             style={styles.input}
             value={apiKey}
@@ -151,46 +219,45 @@ export function SettingsScreen({ onClose }: { onClose: () => void }) {
             autoCapitalize="none"
             autoCorrect={false}
           />
-          <Text style={styles.hint}>
-            Get a free key at ai.google.dev. The key is stored locally on your device only.
-          </Text>
-
+          <View style={styles.separator} />
           <View style={styles.switchRow}>
             <Text style={styles.fieldLabel}>Offline-only mode</Text>
             <Switch
               value={offlineOnly}
               onValueChange={setOfflineOnly}
-              trackColor={{ false: Colors.bgCardAlt, true: Colors.accentSoft }}
-              thumbColor={offlineOnly ? Colors.accent : Colors.textMuted}
+              trackColor={{ false: Colors.bgElevated, true: Colors.accentSoft }}
+              thumbColor={offlineOnly ? Colors.accent : "#f4f4f4"}
             />
           </View>
-          <Text style={styles.hint}>
-            When enabled, the PA only uses deterministic local engines — no API calls.
-          </Text>
         </View>
+        <Text style={styles.sectionFooter}>
+          Get a free key at ai.google.dev. The key is stored locally on your device only. When
+          offline-only is enabled, the PA uses deterministic local engines — no API calls.
+        </Text>
 
         {/* Save */}
-        <TouchableOpacity
+        <PressableScale
           style={[styles.saveButton, saving && { opacity: 0.6 }]}
           onPress={save}
           disabled={saving}
+          haptic="medium"
         >
           <Text style={styles.saveButtonText}>
             {saving ? "Saving…" : "Save Settings"}
           </Text>
-        </TouchableOpacity>
+        </PressableScale>
 
         {/* Danger zone */}
         <Text style={styles.sectionLabel}>DANGER ZONE</Text>
         <View style={[styles.card, styles.dangerCard]}>
           <Text style={styles.fieldLabel}>Reset local data</Text>
-          <Text style={styles.hint}>
+          <Text style={styles.dangerHint}>
             Permanently deletes everything stored on this device — goals, projects, tasks,
             calendar, and history. Cannot be undone.
           </Text>
-          <TouchableOpacity style={styles.dangerButton} onPress={resetLocalData}>
+          <PressableScale style={styles.dangerButton} onPress={resetLocalData} haptic="medium">
             <Text style={styles.dangerButtonText}>Reset local data</Text>
-          </TouchableOpacity>
+          </PressableScale>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -207,74 +274,110 @@ const styles = StyleSheet.create({
     paddingTop: 54,
     paddingBottom: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border
+    borderBottomColor: Colors.separator
   },
-  headerTitle: { color: Colors.textPrimary, fontSize: 20, fontWeight: "700" },
-  closeText: { color: Colors.accent, fontWeight: "600", fontSize: 15 },
+  headerTitle: { color: Colors.textPrimary, fontSize: 18, fontWeight: "600", letterSpacing: -0.4 },
+  closeText: { color: Colors.accent, fontWeight: "600", fontSize: 16 },
   body: { flex: 1 },
+
+  // Section labels — Apple footnote style
   sectionLabel: {
     color: Colors.textMuted,
-    fontSize: 12,
-    fontWeight: "700",
-    letterSpacing: 1.5,
-    marginTop: 20,
-    marginBottom: 10
+    fontSize: 13,
+    letterSpacing: -0.08,
+    textTransform: "uppercase",
+    marginTop: 28,
+    marginBottom: 8,
+    marginLeft: 4
   },
+  sectionFooter: {
+    color: Colors.textMuted,
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 8,
+    marginLeft: 4,
+    marginRight: 4
+  },
+
+  // Grouped inset card — Apple Settings style
   card: {
     backgroundColor: Colors.bgCard,
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    marginBottom: 4
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    ...CardShadow
+  },
+  separator: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: Colors.separator
+  },
+  fieldRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 13
   },
   fieldLabel: {
+    color: Colors.textPrimary,
+    fontSize: 16,
+    fontWeight: "400"
+  },
+  fieldInput: {
     color: Colors.textSecondary,
-    fontSize: 13,
-    fontWeight: "600",
-    marginBottom: 6
+    fontSize: 16,
+    flex: 1,
+    marginLeft: 12
   },
   input: {
     backgroundColor: Colors.bgCardAlt,
     color: Colors.textPrimary,
     borderRadius: 10,
     paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingVertical: 11,
     fontSize: 15,
-    borderWidth: 1,
-    borderColor: Colors.border,
     marginBottom: 12
   },
-  hint: {
-    color: Colors.textMuted,
-    fontSize: 12,
-    lineHeight: 17,
-    marginBottom: 12
-  },
-  row: { flexDirection: "row" },
   switchRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 6,
-    marginTop: 4
+    paddingVertical: 10
   },
+  reminderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 13,
+    gap: 12
+  },
+  reminderText: { flex: 1 },
+  reminderWhen: { color: Colors.textMuted, fontSize: 13, marginTop: 2 },
+
+  // Save
   saveButton: {
     backgroundColor: Colors.accent,
     borderRadius: 14,
-    paddingVertical: 14,
+    paddingVertical: 16,
     alignItems: "center",
-    marginTop: 24
+    marginTop: 28
   },
   saveButtonText: { color: "#fff", fontWeight: "700", fontSize: 16 },
-  dangerCard: { borderColor: "rgba(239, 68, 68, 0.3)" },
-  dangerButton: {
-    backgroundColor: "rgba(239, 68, 68, 0.12)",
-    borderRadius: 12,
-    paddingVertical: 12,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "rgba(239, 68, 68, 0.3)"
+
+  // Danger
+  dangerCard: {
+    paddingVertical: 16
   },
-  dangerButtonText: { color: Colors.danger, fontWeight: "700", fontSize: 14 }
+  dangerHint: {
+    color: Colors.textMuted,
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 6,
+    marginBottom: 14
+  },
+  dangerButton: {
+    backgroundColor: "rgba(255, 69, 58, 0.1)",
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: "center"
+  },
+  dangerButtonText: { color: Colors.danger, fontWeight: "600", fontSize: 15 }
 });

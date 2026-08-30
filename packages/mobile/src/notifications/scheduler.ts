@@ -2,19 +2,43 @@ import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 import { executeTool, formatMinutes, type DataStore, type PlannedBlock, type Task } from "@personalos/core";
 
-/** Configure how notifications appear when the app is in the foreground */
+// A dedicated high-importance channel — without one, Android 8+ (and Realme's
+// ColorOS-based skin especially) can silently suppress notifications or show
+// them without a heads-up alert/sound, which is exactly why a scheduled
+// reminder could go off with nothing actually appearing. All of Jeeko's
+// notifications go through this channel, not whatever "default" one the OS
+// might otherwise fall back to.
+const CHANNEL_ID = "jeeko-default";
+
+/** Configure how notifications appear when the app is in the foreground —
+ * reminders/alarms play a sound since the user explicitly asked to be
+ * notified at a specific moment; the plan-derived nudges stay silent so they
+ * don't feel like alarms going off. */
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: false,
-    shouldSetBadge: false
-  })
+  handleNotification: async (notification) => {
+    const isReminder = notification.request.content.data?.type === "reminder";
+    return {
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: isReminder,
+      shouldSetBadge: false
+    };
+  }
 });
 
-/** Request permission — call once on app start */
+/** Request permission and set up the notification channel — call once on app start. */
 export async function requestNotificationPermissions(): Promise<boolean> {
   if (Platform.OS === "web") return false;
+
+  if (Platform.OS === "android") {
+    await Notifications.setNotificationChannelAsync(CHANNEL_ID, {
+      name: "Jeeko",
+      importance: Notifications.AndroidImportance.HIGH,
+      sound: "default",
+      vibrationPattern: [0, 250, 250, 250],
+      lightColor: "#22D3EE"
+    });
+  }
 
   const { status: existing } = await Notifications.getPermissionsAsync();
   if (existing === "granted") return true;
@@ -66,7 +90,11 @@ export async function scheduleNotifications(params: {
           body: `${formatMinutes(block.durationMinutes)} block starting in 5 minutes. ${block.reason}`,
           data: { type: "block_reminder", taskId: task.id, blockId: block.id }
         },
-        trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: Math.floor(triggerMs / 1000) }
+        trigger: {
+          type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+          seconds: Math.floor(triggerMs / 1000),
+          channelId: CHANNEL_ID
+        }
       });
     }
 
@@ -93,7 +121,7 @@ export async function scheduleNotifications(params: {
           body: `Due in ~${hoursLeft}h. Estimated ${formatMinutes(task.estimatedMinutes)} of work remaining.`,
           data: { type: "deadline_warning", taskId: task.id }
         },
-        trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 60 }
+        trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 60, channelId: CHANNEL_ID }
       });
     }
 
@@ -114,9 +142,34 @@ export async function scheduleNotifications(params: {
             body: `You have ${formatMinutes(overload)} more work than usable time. Some tasks need to move.`,
             data: { type: "overload_warning" }
           },
-          trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 120 }
+          trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 120, channelId: CHANNEL_ID }
         });
       }
+    }
+
+    // 4b. Standalone reminders/alarms the user (via Jeeko) set explicitly —
+    // independent of the plan, just "notify at this exact time." Uses an
+    // absolute DATE trigger rather than a relative seconds-from-now one,
+    // since that's the actual semantics of an alarm and avoids any drift
+    // from however long this scheduling pass itself takes to run. Any
+    // reminder whose time already passed (app was closed/killed when it
+    // should have fired) is marked fired here instead of re-notifying late.
+    const reminders = await store.listReminders();
+    for (const reminder of reminders) {
+      if (reminder.fired) continue;
+      if (reminder.triggerAt.getTime() <= now.getTime()) {
+        await store.saveReminder({ ...reminder, fired: true });
+        continue;
+      }
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: "Jeeko",
+          body: reminder.title,
+          data: { type: "reminder", reminderId: reminder.id },
+          sound: "default"
+        },
+        trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: reminder.triggerAt, channelId: CHANNEL_ID }
+      });
     }
 
     // 4. Daily review prompt (schedule for sleep time - 30min)
@@ -134,7 +187,11 @@ export async function scheduleNotifications(params: {
             body: "Time to review your day — check what got done, log actual time, and prep tomorrow.",
             data: { type: "daily_review" }
           },
-          trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: Math.floor(reviewMs / 1000) }
+          trigger: {
+            type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+            seconds: Math.floor(reviewMs / 1000),
+            channelId: CHANNEL_ID
+          }
         });
       }
     }

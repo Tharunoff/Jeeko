@@ -9,7 +9,9 @@ import { IOSOutputFormat, AudioQuality, type RecordingOptions } from "expo-audio
 // be picked to match, per platform (see voiceMimeTypeForPlatform below).
 // (Proven pattern, reused verbatim from ShowUp_App's mobile/src/utils/voiceRecordingOptions.ts.)
 export const VOICE_RECORDING_OPTIONS: RecordingOptions = {
-  isMeteringEnabled: false,
+  // Needed so useVoiceSession can auto-stop listening once the user stops
+  // talking, instead of waiting for a manual tap or the 30s safety cap.
+  isMeteringEnabled: true,
   extension: Platform.OS === "android" ? ".aac" : ".wav",
   sampleRate: 44100,
   numberOfChannels: 2,

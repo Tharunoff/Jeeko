@@ -6,6 +6,7 @@ import type {
   MemoryEntry,
   PlannedBlock,
   Project,
+  Reminder,
   Task,
   TimeLog,
   UserProfile
@@ -60,4 +61,8 @@ export interface DataStore {
 
   getPreference(key: string): Promise<string | undefined>;
   setPreference(key: string, value: string): Promise<void>;
+
+  listReminders(): Promise<Reminder[]>;
+  saveReminder(reminder: Reminder): Promise<void>;
+  deleteReminder(id: string): Promise<void>;
 }

@@ -6,9 +6,15 @@ import type {
   ToolCallRequest,
   ToolDeclaration
 } from "@personalos/core";
+import { chatKeyRotator } from "./apiKeyPool";
 
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
-const DEFAULT_MODEL = "gemini-2.0-flash";
+// gemini-2.0-flash was retired server-side; its replacement (gemini-3.6-flash)
+// worked but turned out to carry a much tighter free-tier daily quota (20
+// requests/day on this key) than the lite tier does — lite is also faster,
+// which directly helps reply latency too. Quota is tracked per (key, model),
+// confirmed via a direct 429 body from Google, not assumed.
+const DEFAULT_MODEL = "gemini-3.5-flash-lite";
 
 /**
  * Maps core Message[] → Gemini API "contents" format.
@@ -31,7 +37,11 @@ function toGeminiContents(messages: Message[]): any[] {
       contents.push({ role: "user", parts });
     } else if (msg.role === "assistant") {
       if (msg.toolName && msg.toolArgs !== undefined) {
-        // This is a tool-call request from the assistant
+        // This is a tool-call request from the assistant. Gemini's "thinking"
+        // models (3.x) stamp each functionCall with a thought_signature and then
+        // require it back verbatim on the next request — omit it and the API
+        // rejects the follow-up with a 400 INVALID_ARGUMENT.
+        const meta = msg.providerMeta as { thoughtSignature?: string } | undefined;
         contents.push({
           role: "model",
           parts: [
@@ -39,7 +49,8 @@ function toGeminiContents(messages: Message[]): any[] {
               functionCall: {
                 name: msg.toolName,
                 args: msg.toolArgs as Record<string, unknown>
-              }
+              },
+              ...(meta?.thoughtSignature ? { thoughtSignature: meta.thoughtSignature } : {})
             }
           ]
         });
@@ -111,7 +122,10 @@ function parseGeminiResponse(data: any): LLMResponse {
       toolCalls.push({
         id: `tc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         name: part.functionCall.name,
-        args: part.functionCall.args ?? {}
+        args: part.functionCall.args ?? {},
+        // Stashed so the agent loop can carry it onto the transcript's assistant
+        // turn — toGeminiContents() puts it back on the next request.
+        providerMeta: part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : undefined
       });
     }
   }
@@ -123,12 +137,10 @@ function parseGeminiResponse(data: any): LLMResponse {
 }
 
 export class GeminiProvider implements LLMProvider {
-  private apiKey: string;
   private model: string;
   private systemInstruction: string;
 
-  constructor(params: { apiKey: string; model?: string; systemInstruction: string }) {
-    this.apiKey = params.apiKey;
+  constructor(params: { model?: string; systemInstruction: string }) {
     this.model = params.model ?? DEFAULT_MODEL;
     this.systemInstruction = params.systemInstruction;
   }
@@ -138,8 +150,6 @@ export class GeminiProvider implements LLMProvider {
     context: AssistantContext,
     tools: ToolDeclaration[]
   ): Promise<LLMResponse> {
-    const url = `${GEMINI_BASE}/${this.model}:generateContent?key=${this.apiKey}`;
-
     const body: any = {
       contents: toGeminiContents(messages),
       tools: toGeminiTools(tools),
@@ -166,15 +176,34 @@ export class GeminiProvider implements LLMProvider {
       },
       generationConfig: {
         temperature: 0.3,
-        maxOutputTokens: 2048
+        // Replies are spoken aloud (see systemPrompt's brevity rule) — capping
+        // lower than before both encourages that and bounds worst-case TTS
+        // synthesis time, since the whole clip has to render before playback
+        // can start.
+        maxOutputTokens: 1024
       }
     };
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
-    });
+    // Retry across the key pool on quota exhaustion (429) — one attempt per
+    // key at most, so a fully-exhausted pool fails fast instead of looping.
+    let key = chatKeyRotator.getActiveKey();
+    if (!key) throw new Error("No Gemini API key available (none configured, or every key's daily quota is used up).");
+
+    let response: Response;
+    let attempts = 0;
+    for (;;) {
+      attempts++;
+      const url = `${GEMINI_BASE}/${this.model}:generateContent?key=${key}`;
+      response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      if (response.status !== 429) break;
+      const nextKey = chatKeyRotator.rotateAfterExhaustion(key);
+      if (!nextKey || attempts >= 8) break; // exhausted the whole pool (or a runaway loop guard)
+      key = nextKey;
+    }
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => "unknown error");

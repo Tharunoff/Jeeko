@@ -15,6 +15,7 @@ import type {
   PlannedBlock,
   Project,
   ProjectStatus,
+  Reminder,
   Task,
   TaskStatus,
   TimeLog,
@@ -390,6 +391,23 @@ export class SqliteDataStore implements DataStore {
       [key, value, new Date().toISOString()]
     );
   }
+
+  // ---------------------------------------------------------------- reminders
+  async listReminders(): Promise<Reminder[]> {
+    const rows = await this.db.getAllAsync<any>(`SELECT * FROM reminders ORDER BY trigger_at ASC`);
+    return rows.map(rowToReminder);
+  }
+  async saveReminder(reminder: Reminder): Promise<void> {
+    await this.db.runAsync(
+      `INSERT INTO reminders (id, title, trigger_at, fired, created_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET title=excluded.title, trigger_at=excluded.trigger_at, fired=excluded.fired`,
+      [reminder.id, reminder.title, toIso(reminder.triggerAt), reminder.fired ? 1 : 0, toIso(reminder.createdAt)]
+    );
+  }
+  async deleteReminder(id: string): Promise<void> {
+    await this.db.runAsync(`DELETE FROM reminders WHERE id = ?`, [id]);
+  }
 }
 
 function rowToGoal(row: any): Goal {
@@ -449,6 +467,16 @@ function rowToMemory(row: any): MemoryEntry {
     expiresAt: fromIso(row.expires_at),
     createdAt: fromIso(row.created_at)!,
     updatedAt: fromIso(row.updated_at)!
+  };
+}
+
+function rowToReminder(row: any): Reminder {
+  return {
+    id: row.id,
+    title: row.title,
+    triggerAt: fromIso(row.trigger_at)!,
+    fired: !!row.fired,
+    createdAt: fromIso(row.created_at)!
   };
 }
 

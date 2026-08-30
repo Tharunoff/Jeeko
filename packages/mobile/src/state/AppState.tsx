@@ -7,10 +7,19 @@ import { GeminiProvider } from "../llm/GeminiProvider";
 import { PA_SYSTEM_PROMPT } from "../llm/systemPrompt";
 import { tryOfflineIntent } from "../chat/offlineIntentMatcher";
 import { requestNotificationPermissions, scheduleNotifications } from "../notifications/scheduler";
+import { DEV_DEFAULT_GEMINI_API_KEYS } from "../config/devDefaults";
+import { configureApiKeyPool, hasAnyApiKey, setKeyPoolPersistence, loadPersistedExhaustion } from "../llm/apiKeyPool";
+
+/** When Jeeko's answer is something better shown than said — a whole week's shape,
+ * today's block-by-block schedule — the agent loop's tool calls already computed the
+ * real data; this just carries the last relevant one out to the chat UI instead of
+ * discarding it once the reply text is written. */
+export type RichData = { type: "week"; result: any } | { type: "today"; result: any };
 
 export interface ChatResult {
   text: string;
   source: "offline" | "gemini" | "fallback";
+  richData?: RichData;
 }
 
 export interface ChatInput {
@@ -31,6 +40,26 @@ interface AppStateValue {
   chat: (input: ChatInput, history: Message[]) => Promise<ChatResult>;
   /** Whether Gemini is configured and available */
   hasGemini: boolean;
+}
+
+const WEEK_TOOLS = new Set(["get_week_schedule", "plan_week"]);
+const TODAY_TOOLS = new Set(["get_today_schedule", "plan_day"]);
+
+/** Scans the agent loop's transcript for the most recent week/today-schedule tool
+ * result — the LLM already restyled it into prose, but the underlying structured
+ * data is what a visual card actually needs. Week wins if both showed up in the same
+ * turn, since a week view is the strictly richer thing to show. */
+function extractRichData(transcript: Message[]): RichData | undefined {
+  let today: unknown;
+  let week: unknown;
+  for (const m of transcript) {
+    if (m.role !== "tool" || !m.toolName) continue;
+    if (TODAY_TOOLS.has(m.toolName) && m.toolResult && !(m.toolResult as any).error) today = m.toolResult;
+    if (WEEK_TOOLS.has(m.toolName) && m.toolResult && !(m.toolResult as any).error) week = m.toolResult;
+  }
+  if (week) return { type: "week", result: week };
+  if (today) return { type: "today", result: today };
+  return undefined;
 }
 
 const AppStateContext = createContext<AppStateValue | null>(null);
@@ -73,13 +102,19 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       }
       if (cancelled) return;
 
-      // Check for Gemini API key
-      const apiKey = await db.getPreference("gemini_api_key");
-      if (apiKey && apiKey.length > 10) {
-        providerRef.current = new GeminiProvider({
-          apiKey,
-          systemInstruction: PA_SYSTEM_PROMPT
-        });
+      // Build the key pool — the Settings key (if set) first, then the
+      // hardcoded dev/family fallbacks (see config/devDefaults.ts) — so a
+      // user-entered key is always preferred but there's still somewhere to
+      // rotate to if it runs out of quota mid-session.
+      const settingsKey = await db.getPreference("gemini_api_key");
+      configureApiKeyPool([settingsKey, ...DEV_DEFAULT_GEMINI_API_KEYS]);
+      // Restore which keys were already known exhausted from a previous
+      // session (still within today's quota window) so this launch doesn't
+      // waste a request re-discovering that, and save future discoveries.
+      setKeyPoolPersistence(db);
+      await loadPersistedExhaustion(db);
+      if (hasAnyApiKey()) {
+        providerRef.current = new GeminiProvider({ systemInstruction: PA_SYSTEM_PROMPT });
         setHasGemini(true);
       }
 
@@ -99,13 +134,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!store || !ready) return;
     (async () => {
-      const apiKey = await store.getPreference("gemini_api_key");
+      const settingsKey = await store.getPreference("gemini_api_key");
       const offlineOnly = await store.getPreference("offline_only");
-      if (apiKey && apiKey.length > 10 && offlineOnly !== "true") {
-        providerRef.current = new GeminiProvider({
-          apiKey,
-          systemInstruction: PA_SYSTEM_PROMPT
-        });
+      configureApiKeyPool(offlineOnly === "true" ? [] : [settingsKey, ...DEV_DEFAULT_GEMINI_API_KEYS]);
+      if (hasAnyApiKey()) {
+        providerRef.current = new GeminiProvider({ systemInstruction: PA_SYSTEM_PROMPT });
         setHasGemini(true);
       } else {
         providerRef.current = null;
@@ -163,7 +196,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           });
           // Trigger refresh so screens pick up any state changes the tools made
           refresh();
-          return { text: result.text, source: "gemini" };
+          return { text: result.text, source: "gemini", richData: extractRichData(result.transcript) };
         } catch (e) {
           console.warn("Gemini error, falling back:", e);
           return {

@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { executeTool, formatMinutes } from "@personalos/core";
 import { useAppState } from "../state/AppState";
-import { Colors } from "../theme/colors";
+import { Colors, CardShadow } from "../theme/colors";
+import { PressableScale } from "../components/PressableScale";
 
 interface DayData {
   key: string;
@@ -83,7 +84,7 @@ export function WeekScreen() {
           <View style={styles.overviewRow}>
             <View style={styles.overviewItem}>
               <Text style={styles.overviewValue}>{formatMinutes(weeklyStats.totalCapacity)}</Text>
-              <Text style={styles.overviewLabel}>total capacity</Text>
+              <Text style={styles.overviewLabel}>capacity</Text>
             </View>
             <View style={styles.overviewDivider} />
             <View style={styles.overviewItem}>
@@ -120,11 +121,12 @@ export function WeekScreen() {
         const over = d.committed > d.usable;
         const remaining = Math.max(0, d.usable - d.committed);
         return (
-          <TouchableOpacity
+          <PressableScale
             key={d.key}
             style={[styles.dayCard, d.isToday && styles.dayCardToday]}
             onPress={() => setExpandedDay(expandedDay === d.key ? null : d.key)}
-            activeOpacity={0.7}
+            haptic="selection"
+            activeScale={0.98}
           >
             <View style={styles.dayHeader}>
               <View style={styles.dayNameRow}>
@@ -177,7 +179,7 @@ export function WeekScreen() {
                 </View>
               </View>
             )}
-          </TouchableOpacity>
+          </PressableScale>
         );
       })}
 
@@ -199,69 +201,73 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.bg,
     justifyContent: "center",
     alignItems: "center",
-    gap: 12
+    gap: 14
   },
-  loadingText: { color: Colors.textMuted, fontSize: 14 },
-  title: { color: Colors.textPrimary, fontSize: 24, fontWeight: "800", letterSpacing: -0.3, marginBottom: 16 },
+  loadingText: { color: Colors.textMuted, fontSize: 15 },
+  title: {
+    color: Colors.textPrimary,
+    fontSize: 34,
+    fontWeight: "700",
+    letterSpacing: 0.37,
+    marginBottom: 20
+  },
 
   // Overview
   overviewCard: {
     backgroundColor: Colors.bgCard,
-    borderRadius: 18,
-    padding: 18,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: Colors.border
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 14,
+    ...CardShadow
   },
   overviewRow: { flexDirection: "row", alignItems: "center" },
   overviewItem: { flex: 1, alignItems: "center" },
-  overviewDivider: { width: 1, height: 36, backgroundColor: Colors.border },
-  overviewValue: { color: Colors.textPrimary, fontSize: 20, fontWeight: "800" },
-  overviewLabel: { color: Colors.textMuted, fontSize: 11, marginTop: 4 },
+  overviewDivider: { width: StyleSheet.hairlineWidth, height: 36, backgroundColor: Colors.separator },
+  overviewValue: { color: Colors.textPrimary, fontSize: 22, fontWeight: "700", fontVariant: ["tabular-nums"] },
+  overviewLabel: { color: Colors.textMuted, fontSize: 12, marginTop: 4 },
 
   // Warning
   warningCard: {
     flexDirection: "row",
     alignItems: "flex-start",
-    backgroundColor: "rgba(245, 158, 11, 0.08)",
+    backgroundColor: "rgba(255, 214, 10, 0.06)",
     borderRadius: 14,
-    padding: 14,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: "rgba(245, 158, 11, 0.2)"
+    padding: 16,
+    marginBottom: 10
   },
-  warningIcon: { marginRight: 10, marginTop: 2 },
-  warningText: { flex: 1, color: Colors.textSecondary, fontSize: 13, lineHeight: 19 },
+  warningIcon: { marginRight: 12, marginTop: 1 },
+  warningText: { flex: 1, color: Colors.textSecondary, fontSize: 14, lineHeight: 20 },
 
   // Day cards
   dayCard: {
     backgroundColor: Colors.bgCard,
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: Colors.border
+    borderRadius: 14,
+    padding: 18,
+    marginBottom: 10,
+    ...CardShadow
   },
-  dayCardToday: { borderColor: Colors.accent, borderWidth: 1.5 },
-  dayHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 10 },
+  dayCardToday: {
+    backgroundColor: Colors.accentSoft
+  },
+  dayHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 },
   dayNameRow: { flexDirection: "column" },
-  dayLabel: { color: Colors.textPrimary, fontSize: 16, fontWeight: "700" },
-  dayDate: { color: Colors.textMuted, fontSize: 11, marginTop: 2 },
+  dayLabel: { color: Colors.textPrimary, fontSize: 17, fontWeight: "600", letterSpacing: -0.4 },
+  dayDate: { color: Colors.textMuted, fontSize: 12, marginTop: 2 },
   dayStats: { flexDirection: "row", alignItems: "baseline" },
-  dayCommitted: { color: Colors.textPrimary, fontSize: 16, fontWeight: "700" },
-  daySlash: { color: Colors.textMuted, fontSize: 14, marginHorizontal: 3 },
-  dayUsable: { color: Colors.textMuted, fontSize: 14 },
+  dayCommitted: { color: Colors.textPrimary, fontSize: 17, fontWeight: "700", fontVariant: ["tabular-nums"] },
+  daySlash: { color: Colors.textMuted, fontSize: 15, marginHorizontal: 3 },
+  dayUsable: { color: Colors.textMuted, fontSize: 15, fontVariant: ["tabular-nums"] },
   barTrack: {
-    height: 6,
-    borderRadius: 3,
+    height: 8,
+    borderRadius: 4,
     backgroundColor: Colors.bgCardAlt,
     overflow: "hidden"
   },
-  barFill: { height: 6, borderRadius: 3 },
+  barFill: { height: 8, borderRadius: 4 },
 
   // Expanded detail
-  dayDetail: { marginTop: 12, gap: 4 },
+  dayDetail: { marginTop: 14, gap: 6 },
   detailRow: { flexDirection: "row", justifyContent: "space-between" },
-  detailLabel: { color: Colors.textMuted, fontSize: 13 },
-  detailValue: { color: Colors.textPrimary, fontSize: 13, fontWeight: "600" }
+  detailLabel: { color: Colors.textMuted, fontSize: 14 },
+  detailValue: { color: Colors.textPrimary, fontSize: 14, fontWeight: "600", fontVariant: ["tabular-nums"] }
 });

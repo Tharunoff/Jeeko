@@ -176,6 +176,19 @@ export interface MemoryEntry {
   updatedAt: Date;
 }
 
+/** A standalone alarm/reminder — "remind me to drink water at 5pm", "set an alarm
+ * for 7am" — deliberately independent of the task-scheduling engine (it's not a
+ * task with capacity/priority, just a point in time to notify at). The mobile app
+ * turns each un-fired one into a real local notification (see
+ * notifications/scheduler.ts); this type only carries the data, not the delivery. */
+export interface Reminder {
+  id: ID;
+  title: string;
+  triggerAt: Date;
+  fired: boolean;
+  createdAt: Date;
+}
+
 export interface DailyReview {
   id: ID;
   date: string; // "YYYY-MM-DD" in the user's local timezone
@@ -236,6 +249,10 @@ export interface Message {
   toolName?: string;
   toolArgs?: unknown;
   toolResult?: unknown;
+  /** Opaque round-trip data a provider attaches to its own tool-call turns (e.g.
+   * Gemini's thought signature, required back verbatim on the next request when
+   * thinking is enabled). Providers that don't need it just ignore it. */
+  providerMeta?: unknown;
 }
 
 export interface AssistantContext {
@@ -253,6 +270,9 @@ export interface ToolCallRequest {
   id: string;
   name: string;
   args: unknown;
+  /** See Message.providerMeta — carried through so the agent loop can stash it
+   * back onto the transcript's assistant turn for the next round-trip. */
+  providerMeta?: unknown;
 }
 
 export interface LLMResponse {

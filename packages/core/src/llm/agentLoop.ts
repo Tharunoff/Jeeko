@@ -37,8 +37,24 @@ export async function runAgentLoop(params: {
       return { text: response.text ?? FALLBACK_TEXT, transcript: messages };
     }
 
+    // When a provider returns several tool calls at once (parallel calls in a
+    // single model turn), push all the assistant "requests" first and all the
+    // "results" after — not interleaved per-call. Interleaving would split what
+    // was one model turn + one results turn into several alternating turns; for
+    // providers like Gemini that stamp turn-level metadata (a thought signature)
+    // only on part of a multi-part turn, replaying it back in the wrong shape is
+    // rejected outright. Grouping this way lets each provider's own
+    // message-merging reconstruct the original turn boundaries.
     for (const call of response.toolCalls) {
-      messages.push({ role: "assistant", toolCallId: call.id, toolName: call.name, toolArgs: call.args });
+      messages.push({
+        role: "assistant",
+        toolCallId: call.id,
+        toolName: call.name,
+        toolArgs: call.args,
+        providerMeta: call.providerMeta
+      });
+    }
+    for (const call of response.toolCalls) {
       let toolResult: unknown;
       try {
         toolResult = await executeTool(call.name, call.args, { store, now });

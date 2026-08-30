@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "personalos-mobile-web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "web", "--prefix", "packages/mobile"],
+      "port": 8081
+    }
+  ]
+}

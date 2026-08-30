@@ -4,22 +4,25 @@ import {
   Animated,
   KeyboardAvoidingView,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
   View
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useAudioRecorder, AudioModule } from "expo-audio";
 import { File } from "expo-file-system";
 import type { Message } from "@personalos/core";
-import { useAppState } from "../state/AppState";
-import { Colors } from "../theme/colors";
+import { useAppState, type RichData } from "../state/AppState";
+import { Colors, CardShadow, SmallShadow } from "../theme/colors";
 import { VOICE_RECORDING_OPTIONS, voiceMimeTypeForPlatform } from "../voice/recordingOptions";
 import { speak, stopSpeaking } from "../voice/speech";
+import { PressableScale } from "../components/PressableScale";
+import { FadeInUp } from "../components/FadeInUp";
+import { VoiceOrb } from "../components/VoiceOrb";
+import { WeekMiniCard } from "../components/WeekMiniCard";
+import { TodayMiniCard } from "../components/TodayMiniCard";
 
 interface ChatMessage {
   id: string;
@@ -27,6 +30,7 @@ interface ChatMessage {
   text: string;
   source?: "offline" | "gemini" | "fallback";
   wasVoice?: boolean;
+  richData?: RichData;
 }
 
 const SUGGESTION_CHIPS = [
@@ -50,13 +54,13 @@ function formatDuration(ms: number) {
 }
 
 export function ChatScreen({ onClose }: { onClose: () => void }) {
-  const { chat, hasGemini, refresh } = useAppState();
+  const { chat, hasGemini, refresh, store, user } = useAppState();
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: "welcome",
       role: "assistant",
       text: hasGemini
-        ? "I'm your PA. Ask me anything, or hold the mic to talk — I'll calculate real answers from your actual schedule and priorities."
+        ? "I'm Jeeko. Ask me anything, or hold the mic to talk — I'll calculate real answers from your actual schedule and priorities."
         : "I'm running in offline mode. I can handle common commands like \"what should I do now\", \"how much free time today\", or \"can I finish X\". Set up a Gemini API key in Settings for full natural-language support and voice."
     }
   ]);
@@ -116,7 +120,8 @@ export function ChatScreen({ onClose }: { onClose: () => void }) {
         id: `a_${Date.now()}`,
         role: "assistant",
         text: result.text,
-        source: result.source
+        source: result.source,
+        richData: result.richData
       };
       setMessages((m) => [...m, assistantMsg]);
 
@@ -157,13 +162,13 @@ export function ChatScreen({ onClose }: { onClose: () => void }) {
   async function startRecording() {
     if (!CAN_RECORD || sending) return;
     if (!hasGemini) {
-      Alert.alert("Voice needs Gemini", "Add your Gemini API key in Settings to talk to your PA.");
+      Alert.alert("Voice needs Gemini", "Add your Gemini API key in Settings to talk to Jeeko.");
       return;
     }
     try {
       const permission = await AudioModule.requestRecordingPermissionsAsync();
       if (!permission.granted) {
-        Alert.alert("Microphone permission needed", "Enable microphone access to talk to your PA.");
+        Alert.alert("Microphone permission needed", "Enable microphone access to talk to Jeeko.");
         return;
       }
       await recorder.prepareToRecordAsync();
@@ -215,6 +220,14 @@ export function ChatScreen({ onClose }: { onClose: () => void }) {
     onClose();
   }
 
+  // Jeeko shrinks down to a small avatar hovering over the input whenever the
+  // latest thing he said came with a visual (a week view, today's schedule) —
+  // a quiet signal that there's something to look at, not just read. Tapping
+  // him reads that reply back out loud.
+  const lastMessage = messages[messages.length - 1];
+  const miniJeekoMessage =
+    lastMessage?.role === "assistant" && lastMessage.richData ? lastMessage : undefined;
+
   return (
     <KeyboardAvoidingView
       style={styles.screen}
@@ -222,16 +235,16 @@ export function ChatScreen({ onClose }: { onClose: () => void }) {
     >
       {/* Header */}
       <View style={styles.header}>
-        <View>
-          <Text style={styles.headerTitle}>Ask PA</Text>
+        <View style={styles.headerCenter}>
+          <Text style={styles.headerTitle}>Jeeko</Text>
           <View style={styles.headerSubRow}>
             <View style={[styles.statusDot, { backgroundColor: hasGemini ? Colors.success : Colors.warning }]} />
             <Text style={styles.headerSub}>{hasGemini ? "AI connected" : "Offline mode"}</Text>
           </View>
         </View>
-        <TouchableOpacity onPress={handleClose} style={styles.closeButton}>
+        <PressableScale onPress={handleClose} style={styles.closeButton} haptic="light">
           <Feather name="x" size={16} color={Colors.textSecondary} />
-        </TouchableOpacity>
+        </PressableScale>
       </View>
 
       {/* Messages */}
@@ -242,7 +255,7 @@ export function ChatScreen({ onClose }: { onClose: () => void }) {
         onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: false })}
       >
         {messages.map((m) => (
-          <View
+          <FadeInUp
             key={m.id}
             style={[
               styles.bubble,
@@ -253,8 +266,12 @@ export function ChatScreen({ onClose }: { onClose: () => void }) {
               {m.wasVoice && (
                 <Feather name="mic" size={13} color="rgba(255,255,255,0.8)" style={{ marginRight: 6, marginTop: 3 }} />
               )}
-              <Text style={styles.bubbleText}>{m.text}</Text>
+              <Text style={[styles.bubbleText, m.role === "user" && styles.bubbleTextUser]}>{m.text}</Text>
             </View>
+            {m.richData?.type === "week" && <WeekMiniCard result={m.richData.result} />}
+            {m.richData?.type === "today" && store && user && (
+              <TodayMiniCard result={m.richData.result} store={store} timezone={user.timezone} />
+            )}
             <View style={styles.bubbleFooterRow}>
               {m.source && m.role === "assistant" && (
                 <Text style={styles.sourceTag}>
@@ -262,12 +279,12 @@ export function ChatScreen({ onClose }: { onClose: () => void }) {
                 </Text>
               )}
               {m.role === "assistant" && (
-                <TouchableOpacity onPress={() => speak(m.text)} hitSlop={8}>
+                <PressableScale onPress={() => speak(m.text)} hitSlop={8} haptic="light" activeScale={0.85}>
                   <Feather name="volume-2" size={13} color={Colors.textMuted} />
-                </TouchableOpacity>
+                </PressableScale>
               )}
             </View>
-          </View>
+          </FadeInUp>
         ))}
 
         {/* Typing indicator */}
@@ -307,18 +324,28 @@ export function ChatScreen({ onClose }: { onClose: () => void }) {
           horizontal
           showsHorizontalScrollIndicator={false}
           style={styles.chipsScroll}
-          contentContainerStyle={{ paddingHorizontal: 12, gap: 8 }}
+          contentContainerStyle={{ paddingHorizontal: 16, gap: 8 }}
         >
           {SUGGESTION_CHIPS.map((chip) => (
-            <TouchableOpacity
+            <PressableScale
               key={chip}
               style={styles.chip}
               onPress={() => send(chip)}
+              haptic="selection"
+              activeScale={0.95}
             >
               <Text style={styles.chipText}>{chip}</Text>
-            </TouchableOpacity>
+            </PressableScale>
           ))}
         </ScrollView>
+      )}
+
+      {/* Miniature Jeeko — hovers above the input when the last reply came with
+          something visual, so it's clear there's more than just the text. */}
+      {miniJeekoMessage && !isRecording && (
+        <FadeInUp key={miniJeekoMessage.id} style={styles.miniJeeko}>
+          <VoiceOrb state="idle" size={40} onPress={() => speak(miniJeekoMessage.text)} />
+        </FadeInUp>
       )}
 
       {/* Input */}
@@ -332,7 +359,7 @@ export function ChatScreen({ onClose }: { onClose: () => void }) {
         <View style={styles.inputRow}>
           <TextInput
             style={styles.input}
-            placeholder="Tell your PA what's happening…"
+            placeholder="Tell Jeeko what's happening…"
             placeholderTextColor={Colors.textMuted}
             value={input}
             onChangeText={setInput}
@@ -342,27 +369,29 @@ export function ChatScreen({ onClose }: { onClose: () => void }) {
             multiline
           />
           {input.trim() ? (
-            <TouchableOpacity
+            <PressableScale
               style={[styles.sendButton, sending && { opacity: 0.4 }]}
               onPress={() => send()}
               disabled={sending}
+              haptic="medium"
             >
               <Feather name="arrow-up" size={18} color="#fff" />
-            </TouchableOpacity>
+            </PressableScale>
           ) : CAN_RECORD ? (
-            <Pressable
-              style={({ pressed }) => [
+            <PressableScale
+              style={[
                 styles.sendButton,
-                styles.micButton,
                 !hasGemini && styles.micButtonDisabled,
-                pressed && styles.micButtonPressed
+                isRecording && styles.micButtonPressed
               ]}
               onPressIn={startRecording}
               onPressOut={finishRecording}
               disabled={sending}
+              haptic="medium"
+              activeScale={0.88}
             >
               <Feather name="mic" size={18} color="#fff" />
-            </Pressable>
+            </PressableScale>
           ) : (
             <View style={[styles.sendButton, { opacity: 0.3 }]}>
               <Feather name="mic-off" size={18} color="#fff" />
@@ -384,24 +413,25 @@ const styles = StyleSheet.create({
     paddingTop: 54,
     paddingBottom: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border,
+    borderBottomColor: Colors.separator,
     backgroundColor: Colors.bgCard
   },
-  headerTitle: { color: Colors.textPrimary, fontSize: 20, fontWeight: "700" },
-  headerSubRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 },
+  headerCenter: { flex: 1 },
+  headerTitle: { color: Colors.textPrimary, fontSize: 18, fontWeight: "600", letterSpacing: -0.4 },
+  headerSubRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 3 },
   statusDot: { width: 6, height: 6, borderRadius: 3 },
   headerSub: { color: Colors.textMuted, fontSize: 12 },
   closeButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     backgroundColor: Colors.bgCardAlt,
     alignItems: "center",
     justifyContent: "center"
   },
   messages: { flex: 1 },
   bubble: {
-    borderRadius: 18,
+    borderRadius: 20,
     padding: 14,
     marginBottom: 10,
     maxWidth: "85%"
@@ -409,17 +439,17 @@ const styles = StyleSheet.create({
   bubbleUser: {
     backgroundColor: Colors.accent,
     alignSelf: "flex-end",
-    borderBottomRightRadius: 4
+    borderBottomRightRadius: 6
   },
   bubbleAssistant: {
     backgroundColor: Colors.bgCard,
     alignSelf: "flex-start",
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderBottomLeftRadius: 4
+    borderBottomLeftRadius: 6,
+    ...SmallShadow
   },
   bubbleContentRow: { flexDirection: "row" },
-  bubbleText: { flex: 1, color: Colors.textPrimary, fontSize: 15, lineHeight: 22 },
+  bubbleText: { flex: 1, color: Colors.textPrimary, fontSize: 16, lineHeight: 22 },
+  bubbleTextUser: { color: "#fff" },
   bubbleFooterRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 6 },
   sourceTag: {
     color: Colors.textMuted,
@@ -429,8 +459,8 @@ const styles = StyleSheet.create({
   typingBubble: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
-    paddingVertical: 12
+    gap: 5,
+    paddingVertical: 14
   },
   dot: {
     width: 8,
@@ -440,31 +470,40 @@ const styles = StyleSheet.create({
   },
   thinkingText: {
     color: Colors.textMuted,
-    fontSize: 13,
+    fontSize: 14,
     marginLeft: 8
   },
   chipsScroll: {
-    maxHeight: 50,
+    maxHeight: 54,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Colors.border
+    borderTopColor: Colors.separator
   },
   chip: {
-    backgroundColor: Colors.bgCardAlt,
+    backgroundColor: Colors.bgCard,
     borderRadius: 20,
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderWidth: 1,
-    borderColor: Colors.border,
+    paddingVertical: 10,
+    paddingHorizontal: 18,
     marginVertical: 8
   },
-  chipText: { color: Colors.textSecondary, fontSize: 13 },
+  chipText: { color: Colors.textSecondary, fontSize: 14 },
   inputRow: {
     flexDirection: "row",
     padding: 12,
     gap: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Colors.border,
+    borderTopColor: Colors.separator,
     backgroundColor: Colors.bgCard
+  },
+  miniJeeko: {
+    position: "absolute",
+    right: 14,
+    bottom: 72,
+    zIndex: 20,
+    shadowColor: Colors.accent,
+    shadowOpacity: 0.5,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 6
   },
   input: {
     flex: 1,
@@ -473,9 +512,7 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     paddingHorizontal: 18,
     paddingVertical: 12,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    fontSize: 15,
+    fontSize: 16,
     maxHeight: 100
   },
   sendButton: {
@@ -487,7 +524,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignSelf: "flex-end"
   },
-  micButton: {},
   micButtonPressed: { backgroundColor: Colors.danger },
   micButtonDisabled: { backgroundColor: Colors.bgCardAlt },
 
@@ -498,10 +534,10 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Colors.border,
+    borderTopColor: Colors.separator,
     backgroundColor: Colors.bgCard
   },
   recordingDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: Colors.danger },
-  recordingText: { color: Colors.textPrimary, fontSize: 15, fontWeight: "600" },
-  recordingHint: { flex: 1, color: Colors.textMuted, fontSize: 13, textAlign: "right" }
+  recordingText: { color: Colors.textPrimary, fontSize: 16, fontWeight: "600" },
+  recordingHint: { flex: 1, color: Colors.textMuted, fontSize: 14, textAlign: "right" }
 });

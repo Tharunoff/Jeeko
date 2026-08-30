@@ -5,14 +5,14 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
   View
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { executeTool, type CalendarEvent } from "@personalos/core";
 import { useAppState } from "../state/AppState";
-import { Colors } from "../theme/colors";
+import { Colors, CardShadow } from "../theme/colors";
 import { formatClock } from "../utils/format";
+import { PressableScale } from "./PressableScale";
 
 const EVENT_TYPES: Array<{ key: string; label: string; icon: React.ComponentProps<typeof Feather>["name"] }> = [
   { key: "class", label: "Class", icon: "book-open" },
@@ -87,10 +87,10 @@ export function CalendarEventsEditor({ onClose }: { onClose: () => void }) {
   return (
     <View style={styles.screen}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Fixed Commitments</Text>
-        <TouchableOpacity onPress={onClose}>
-          <Text style={styles.closeText}>Close</Text>
-        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Commitments</Text>
+        <PressableScale onPress={onClose} haptic="light">
+          <Text style={styles.closeText}>Done</Text>
+        </PressableScale>
       </View>
 
       <ScrollView style={styles.body} contentContainerStyle={{ padding: 20, paddingBottom: 60 }}>
@@ -102,14 +102,18 @@ export function CalendarEventsEditor({ onClose }: { onClose: () => void }) {
         {todayEvents.length > 0 && (
           <>
             <Text style={styles.sectionLabel}>TODAY</Text>
-            {todayEvents.map((e) => (
-              <EventCard
-                key={e.id}
-                event={e}
-                timezone={user?.timezone ?? "UTC"}
-                onDelete={() => deleteEvent(e.id)}
-              />
-            ))}
+            <View style={styles.eventGroup}>
+              {todayEvents.map((e, idx) => (
+                <View key={e.id}>
+                  <EventCard
+                    event={e}
+                    timezone={user?.timezone ?? "UTC"}
+                    onDelete={() => deleteEvent(e.id)}
+                  />
+                  {idx < todayEvents.length - 1 && <View style={styles.eventSeparator} />}
+                </View>
+              ))}
+            </View>
           </>
         )}
 
@@ -117,14 +121,18 @@ export function CalendarEventsEditor({ onClose }: { onClose: () => void }) {
         {futureEvents.length > 0 && (
           <>
             <Text style={styles.sectionLabel}>UPCOMING</Text>
-            {futureEvents.map((e) => (
-              <EventCard
-                key={e.id}
-                event={e}
-                timezone={user?.timezone ?? "UTC"}
-                onDelete={() => deleteEvent(e.id)}
-              />
-            ))}
+            <View style={styles.eventGroup}>
+              {futureEvents.map((e, idx) => (
+                <View key={e.id}>
+                  <EventCard
+                    event={e}
+                    timezone={user?.timezone ?? "UTC"}
+                    onDelete={() => deleteEvent(e.id)}
+                  />
+                  {idx < futureEvents.length - 1 && <View style={styles.eventSeparator} />}
+                </View>
+              ))}
+            </View>
           </>
         )}
 
@@ -171,35 +179,37 @@ export function CalendarEventsEditor({ onClose }: { onClose: () => void }) {
               horizontal
               showsHorizontalScrollIndicator={false}
               style={styles.typeScroll}
-              contentContainerStyle={{ gap: 6 }}
+              contentContainerStyle={{ gap: 8 }}
             >
               {EVENT_TYPES.map((t) => (
-                <TouchableOpacity
+                <PressableScale
                   key={t.key}
                   style={[styles.typePill, eventType === t.key && styles.typePillActive]}
                   onPress={() => setEventType(t.key)}
+                  haptic="selection"
+                  activeScale={0.94}
                 >
                   <Feather name={t.icon} size={13} color={eventType === t.key ? Colors.accent : Colors.textMuted} />
                   <Text style={[styles.typeText, eventType === t.key && styles.typeTextActive]}>
                     {t.label}
                   </Text>
-                </TouchableOpacity>
+                </PressableScale>
               ))}
             </ScrollView>
 
             <View style={styles.formActions}>
-              <TouchableOpacity onPress={() => setAdding(false)}>
+              <PressableScale onPress={() => setAdding(false)} haptic="light">
                 <Text style={styles.cancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.saveButton} onPress={addEvent}>
+              </PressableScale>
+              <PressableScale style={styles.saveButton} onPress={addEvent} haptic="medium">
                 <Text style={styles.saveButtonText}>Add Event</Text>
-              </TouchableOpacity>
+              </PressableScale>
             </View>
           </View>
         ) : (
-          <TouchableOpacity style={styles.addButton} onPress={() => setAdding(true)}>
+          <PressableScale style={styles.addButton} onPress={() => setAdding(true)} haptic="light">
             <Text style={styles.addButtonText}>+ Add commitment</Text>
-          </TouchableOpacity>
+          </PressableScale>
         )}
       </ScrollView>
     </View>
@@ -229,9 +239,9 @@ function EventCard({
         </Text>
         <Text style={styles.eventType}>{event.type} · {event.fixed ? "fixed" : "flexible"}</Text>
       </View>
-      <TouchableOpacity onPress={onDelete} style={styles.deleteButton}>
-        <Feather name="x" size={13} color={Colors.textMuted} />
-      </TouchableOpacity>
+      <PressableScale onPress={onDelete} style={styles.deleteButton} haptic="light" activeScale={0.85}>
+        <Feather name="x" size={14} color={Colors.textMuted} />
+      </PressableScale>
     </View>
   );
 }
@@ -246,99 +256,102 @@ const styles = StyleSheet.create({
     paddingTop: 54,
     paddingBottom: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border
+    borderBottomColor: Colors.separator
   },
-  headerTitle: { color: Colors.textPrimary, fontSize: 20, fontWeight: "700" },
-  closeText: { color: Colors.accent, fontWeight: "600", fontSize: 15 },
+  headerTitle: { color: Colors.textPrimary, fontSize: 18, fontWeight: "600", letterSpacing: -0.4 },
+  closeText: { color: Colors.accent, fontWeight: "600", fontSize: 16 },
   body: { flex: 1 },
-  hint: { color: Colors.textMuted, fontSize: 13, lineHeight: 19, marginBottom: 12 },
+  hint: { color: Colors.textMuted, fontSize: 14, lineHeight: 20, marginBottom: 16 },
+
   sectionLabel: {
     color: Colors.textMuted,
-    fontSize: 12,
-    fontWeight: "700",
-    letterSpacing: 1.5,
-    marginTop: 16,
-    marginBottom: 10
+    fontSize: 13,
+    letterSpacing: -0.08,
+    textTransform: "uppercase",
+    marginTop: 20,
+    marginBottom: 8,
+    marginLeft: 4
   },
 
-  // Event cards
+  // Event cards — grouped
+  eventGroup: {
+    backgroundColor: Colors.bgCard,
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    ...CardShadow
+  },
+  eventSeparator: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: Colors.separator
+  },
   eventCard: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: Colors.bgCard,
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: Colors.border
+    paddingVertical: 14
   },
-  eventLeft: { marginRight: 12 },
+  eventLeft: { marginRight: 14 },
   eventContent: { flex: 1 },
-  eventTitle: { color: Colors.textPrimary, fontSize: 14, fontWeight: "600" },
-  eventTime: { color: Colors.accent, fontSize: 12, marginTop: 3 },
-  eventType: { color: Colors.textMuted, fontSize: 11, marginTop: 2 },
+  eventTitle: { color: Colors.textPrimary, fontSize: 15, fontWeight: "600" },
+  eventTime: { color: Colors.accent, fontSize: 13, marginTop: 3 },
+  eventType: { color: Colors.textMuted, fontSize: 12, marginTop: 2 },
   deleteButton: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     backgroundColor: Colors.bgCardAlt,
     alignItems: "center",
     justifyContent: "center"
   },
+
   // Empty state
-  emptyState: { alignItems: "center", paddingVertical: 30 },
-  emptyText: { color: Colors.textSecondary, fontSize: 16, fontWeight: "600" },
-  emptySubtext: { color: Colors.textMuted, fontSize: 13, textAlign: "center", marginTop: 8, lineHeight: 19 },
+  emptyState: { alignItems: "center", paddingVertical: 36 },
+  emptyText: { color: Colors.textSecondary, fontSize: 17, fontWeight: "600" },
+  emptySubtext: { color: Colors.textMuted, fontSize: 14, textAlign: "center", marginTop: 8, lineHeight: 20 },
 
   // Form
   addCard: {
     backgroundColor: Colors.bgCard,
-    borderRadius: 18,
-    padding: 18,
-    marginTop: 12,
-    borderWidth: 1,
-    borderColor: Colors.border
+    borderRadius: 16,
+    padding: 20,
+    marginTop: 16,
+    ...CardShadow
   },
   input: {
     backgroundColor: Colors.bgCardAlt,
     color: Colors.textPrimary,
     borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    fontSize: 15,
-    borderWidth: 1,
-    borderColor: Colors.border,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
     marginBottom: 10
   },
   formRow: { flexDirection: "row" },
-  typeScroll: { marginBottom: 12 },
+  typeScroll: { marginBottom: 14 },
   typePill: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 12,
     backgroundColor: Colors.bgCardAlt,
-    borderWidth: 1,
-    borderColor: Colors.border,
     flexDirection: "row",
     alignItems: "center",
-    gap: 4
+    gap: 5
   },
-  typePillActive: { backgroundColor: Colors.accentSoft, borderColor: Colors.accent },
-  typeText: { color: Colors.textSecondary, fontSize: 12 },
-  typeTextActive: { color: Colors.textPrimary, fontWeight: "600" },
+  typePillActive: { backgroundColor: Colors.accentSoft },
+  typeText: { color: Colors.textSecondary, fontSize: 13 },
+  typeTextActive: { color: Colors.accent, fontWeight: "600" },
   formActions: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center"
   },
-  cancelText: { color: Colors.textMuted, fontSize: 14 },
+  cancelText: { color: Colors.textMuted, fontSize: 15, fontWeight: "500" },
   saveButton: {
     backgroundColor: Colors.accent,
-    borderRadius: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 20
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 22
   },
-  saveButtonText: { color: "#fff", fontWeight: "700" },
-  addButton: { alignItems: "center", paddingVertical: 14, marginTop: 12 },
-  addButtonText: { color: Colors.accent, fontWeight: "700", fontSize: 15 }
+  saveButtonText: { color: "#fff", fontWeight: "700", fontSize: 15 },
+  addButton: { alignItems: "center", paddingVertical: 18, marginTop: 16 },
+  addButtonText: { color: Colors.accent, fontWeight: "700", fontSize: 16 }
 });

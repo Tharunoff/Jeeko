@@ -5,7 +5,6 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
   View
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
@@ -17,7 +16,8 @@ import {
   type Task
 } from "@personalos/core";
 import { useAppState } from "../state/AppState";
-import { Colors } from "../theme/colors";
+import { Colors, CardShadow } from "../theme/colors";
+import { PressableScale } from "../components/PressableScale";
 
 const ENERGY_OPTIONS = ["low", "medium", "high"] as const;
 const ENERGY_ICON: Record<(typeof ENERGY_OPTIONS)[number], React.ComponentProps<typeof Feather>["name"]> = {
@@ -125,19 +125,19 @@ export function TasksScreen() {
         return (
           <View key={t.id} style={styles.taskCard}>
             <View style={styles.taskHeader}>
-              <TouchableOpacity style={styles.checkbox} onPress={() => complete(t)}>
+              <PressableScale style={styles.checkbox} onPress={() => complete(t)} haptic="medium" activeScale={0.8}>
                 <View style={[styles.checkboxInner, { borderColor: priorityColor }]} />
-              </TouchableOpacity>
+              </PressableScale>
               <View style={styles.taskInfo}>
                 <Text style={styles.taskTitle}>{t.title}</Text>
                 <View style={styles.taskMeta}>
                   <Text style={styles.metaPill}>
                     {formatMinutes(t.estimatedMinutes)}
                   </Text>
-                  <View style={styles.metaPillIconRow}>
-                    <Feather name={ENERGY_ICON[t.energyRequirement]} size={11} color={Colors.textMuted} />
-                    <Text style={styles.metaPill}>{t.energyRequirement}</Text>
-                  </View>
+                  <View style={styles.metaDot} />
+                  <Feather name={ENERGY_ICON[t.energyRequirement]} size={12} color={Colors.textMuted} />
+                  <Text style={styles.metaPill}>{t.energyRequirement}</Text>
+                  <View style={styles.metaDot} />
                   <View style={[styles.difficultyDot, {
                     backgroundColor:
                       t.difficulty === "hard" ? Colors.danger :
@@ -148,13 +148,13 @@ export function TasksScreen() {
                 </View>
                 {project && (
                   <View style={styles.tagRow}>
-                    <Feather name="folder" size={11} color={Colors.textMuted} />
+                    <Feather name="folder" size={12} color={Colors.textMuted} />
                     <Text style={styles.projectTag}>{project.title}</Text>
                   </View>
                 )}
                 {t.deadline && (
                   <View style={styles.tagRow}>
-                    <Feather name="calendar" size={11} color={t.deadlineType === "hard" ? Colors.danger : Colors.warning} />
+                    <Feather name="calendar" size={12} color={t.deadlineType === "hard" ? Colors.danger : Colors.warning} />
                     <Text style={[
                       styles.deadlineTag,
                       t.deadlineType === "hard" && { color: Colors.danger }
@@ -166,13 +166,13 @@ export function TasksScreen() {
                 )}
                 {t.deferredUntil && (
                   <View style={styles.tagRow}>
-                    <Feather name="arrow-right-circle" size={11} color={Colors.lowEnergy} />
+                    <Feather name="arrow-right-circle" size={12} color={Colors.lowEnergy} />
                     <Text style={styles.deferredTag}>Deferred</Text>
                   </View>
                 )}
                 {t.dependencies.length > 0 && (
                   <View style={styles.tagRow}>
-                    <Feather name="link" size={11} color={Colors.textMuted} />
+                    <Feather name="link" size={12} color={Colors.textMuted} />
                     <Text style={styles.depTag}>
                       Depends on {t.dependencies.length} task{t.dependencies.length > 1 ? "s" : ""}
                     </Text>
@@ -183,12 +183,9 @@ export function TasksScreen() {
 
             {/* Actions */}
             <View style={styles.taskActions}>
-              <TouchableOpacity
-                style={styles.actionButton}
-                onPress={() => deferToTomorrow(t)}
-              >
+              <PressableScale onPress={() => deferToTomorrow(t)} haptic="light">
                 <Text style={styles.actionText}>Move to tomorrow</Text>
-              </TouchableOpacity>
+              </PressableScale>
             </View>
           </View>
         );
@@ -227,68 +224,79 @@ export function TasksScreen() {
           {/* Energy selector */}
           <View style={styles.energyRow}>
             {ENERGY_OPTIONS.map((e) => (
-              <TouchableOpacity
+              <PressableScale
                 key={e}
                 style={[styles.energyPill, energy === e && styles.energyPillActive]}
                 onPress={() => setEnergy(e)}
+                haptic="selection"
+                activeScale={0.94}
               >
                 <Feather name={ENERGY_ICON[e]} size={13} color={energy === e ? Colors.accent : Colors.textMuted} />
                 <Text style={[styles.energyPillText, energy === e && styles.energyPillTextActive]}>
                   {e}
                 </Text>
-              </TouchableOpacity>
+              </PressableScale>
             ))}
           </View>
 
           {/* Project selector */}
           {projects.length > 0 && (
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.projectScroll}>
-              <TouchableOpacity
+              <PressableScale
                 style={[styles.projectPill, !selectedProjectId && styles.projectPillActive]}
                 onPress={() => setSelectedProjectId(undefined)}
+                haptic="selection"
+                activeScale={0.94}
               >
-                <Text style={styles.projectPillText}>No project</Text>
-              </TouchableOpacity>
+                <Text style={[styles.projectPillText, !selectedProjectId && styles.projectPillTextActive]}>No project</Text>
+              </PressableScale>
               {projects
                 .filter((p) => p.status === "active")
                 .map((p) => (
-                  <TouchableOpacity
+                  <PressableScale
                     key={p.id}
                     style={[styles.projectPill, selectedProjectId === p.id && styles.projectPillActive]}
                     onPress={() => setSelectedProjectId(p.id)}
+                    haptic="selection"
+                    activeScale={0.94}
                   >
-                    <Text style={styles.projectPillText}>{p.title}</Text>
-                  </TouchableOpacity>
+                    <Text style={[styles.projectPillText, selectedProjectId === p.id && styles.projectPillTextActive]}>{p.title}</Text>
+                  </PressableScale>
                 ))}
             </ScrollView>
           )}
 
           <View style={styles.formActions}>
-            <TouchableOpacity onPress={() => setAdding(false)}>
+            <PressableScale onPress={() => setAdding(false)} haptic="light">
               <Text style={styles.cancelText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.saveButton} onPress={addTask}>
+            </PressableScale>
+            <PressableScale style={styles.saveButton} onPress={addTask} haptic="medium">
               <Text style={styles.saveButtonText}>Add Task</Text>
-            </TouchableOpacity>
+            </PressableScale>
           </View>
         </View>
       ) : (
-        <TouchableOpacity style={styles.addButton} onPress={() => setAdding(true)}>
+        <PressableScale style={styles.addButton} onPress={() => setAdding(true)} haptic="light">
           <Text style={styles.addButtonText}>+ New task</Text>
-        </TouchableOpacity>
+        </PressableScale>
       )}
 
       {/* Completed tasks */}
       {done.length > 0 && (
         <>
           <Text style={styles.doneLabel}>COMPLETED</Text>
-          {done.slice(0, 10).map((t) => (
-            <View key={t.id} style={styles.doneRow}>
-              <Feather name="check" size={14} color={Colors.success} />
-              <Text style={styles.doneTitle}>{t.title}</Text>
-              <Text style={styles.doneMeta}>{formatMinutes(t.estimatedMinutes)}</Text>
-            </View>
-          ))}
+          <View style={styles.doneCard}>
+            {done.slice(0, 10).map((t, idx) => (
+              <View key={t.id}>
+                <View style={styles.doneRow}>
+                  <Feather name="check" size={14} color={Colors.success} />
+                  <Text style={styles.doneTitle}>{t.title}</Text>
+                  <Text style={styles.doneMeta}>{formatMinutes(t.estimatedMinutes)}</Text>
+                </View>
+                {idx < Math.min(done.length, 10) - 1 && <View style={styles.doneSeparator} />}
+              </View>
+            ))}
+          </View>
         </>
       )}
     </ScrollView>
@@ -297,142 +305,143 @@ export function TasksScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: Colors.bg },
-  title: { color: Colors.textPrimary, fontSize: 24, fontWeight: "800", letterSpacing: -0.3 },
-  subtitle: { color: Colors.textMuted, fontSize: 13, marginTop: 4, marginBottom: 16 },
+  title: {
+    color: Colors.textPrimary,
+    fontSize: 34,
+    fontWeight: "700",
+    letterSpacing: 0.37
+  },
+  subtitle: { color: Colors.textMuted, fontSize: 14, marginTop: 4, marginBottom: 20 },
 
   // Task card
   taskCard: {
     backgroundColor: Colors.bgCard,
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: Colors.border
+    borderRadius: 14,
+    padding: 18,
+    marginBottom: 10,
+    ...CardShadow
   },
   taskHeader: { flexDirection: "row", alignItems: "flex-start" },
-  checkbox: { marginTop: 2, marginRight: 12 },
+  checkbox: { marginTop: 2, marginRight: 14 },
   checkboxInner: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
+    width: 24,
+    height: 24,
+    borderRadius: 7,
     borderWidth: 2
   },
   taskInfo: { flex: 1 },
-  taskTitle: { color: Colors.textPrimary, fontSize: 15, fontWeight: "600" },
+  taskTitle: { color: Colors.textPrimary, fontSize: 16, fontWeight: "600", letterSpacing: -0.3 },
   taskMeta: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    marginTop: 6,
+    marginTop: 8,
     flexWrap: "wrap"
   },
-  metaPill: { color: Colors.textMuted, fontSize: 12 },
-  metaPillIconRow: { flexDirection: "row", alignItems: "center", gap: 4 },
-  difficultyDot: { width: 6, height: 6, borderRadius: 3 },
-  tagRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 5 },
-  projectTag: { color: Colors.textMuted, fontSize: 12 },
-  deadlineTag: { color: Colors.warning, fontSize: 12 },
-  deferredTag: { color: Colors.lowEnergy, fontSize: 12 },
-  depTag: { color: Colors.textMuted, fontSize: 12 },
+  metaPill: { color: Colors.textMuted, fontSize: 13 },
+  metaDot: { width: 3, height: 3, borderRadius: 1.5, backgroundColor: Colors.textMuted, opacity: 0.5 },
+  difficultyDot: { width: 7, height: 7, borderRadius: 3.5 },
+  tagRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 6 },
+  projectTag: { color: Colors.textMuted, fontSize: 13 },
+  deadlineTag: { color: Colors.warning, fontSize: 13 },
+  deferredTag: { color: Colors.lowEnergy, fontSize: 13 },
+  depTag: { color: Colors.textMuted, fontSize: 13 },
 
   // Actions
-  taskActions: { flexDirection: "row", justifyContent: "flex-end", marginTop: 10 },
-  actionButton: {
-    paddingVertical: 5,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    backgroundColor: Colors.bgCardAlt
-  },
-  actionText: { color: Colors.textSecondary, fontSize: 12, fontWeight: "500" },
+  taskActions: { flexDirection: "row", justifyContent: "flex-end", marginTop: 12 },
+  actionText: { color: Colors.accent, fontSize: 14, fontWeight: "500" },
 
   // Add form
   addCard: {
     backgroundColor: Colors.bgCard,
-    borderRadius: 18,
-    padding: 18,
+    borderRadius: 16,
+    padding: 20,
     marginTop: 8,
-    borderWidth: 1,
-    borderColor: Colors.border
+    ...CardShadow
   },
   input: {
     backgroundColor: Colors.bgCardAlt,
     color: Colors.textPrimary,
     borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    fontSize: 15,
-    borderWidth: 1,
-    borderColor: Colors.border,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
     marginBottom: 10
   },
   formRow: { flexDirection: "row" },
-  energyRow: { flexDirection: "row", gap: 8, marginBottom: 10 },
+  energyRow: { flexDirection: "row", gap: 8, marginBottom: 12 },
   energyPill: {
     flex: 1,
-    paddingVertical: 8,
+    paddingVertical: 10,
     borderRadius: 12,
     backgroundColor: Colors.bgCardAlt,
-    borderWidth: 1,
-    borderColor: Colors.border,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 4
+    gap: 5
   },
-  energyPillActive: { backgroundColor: Colors.accentSoft, borderColor: Colors.accent },
-  energyPillText: { color: Colors.textSecondary, fontSize: 12, textTransform: "capitalize" },
-  energyPillTextActive: { color: Colors.textPrimary, fontWeight: "600" },
-  projectScroll: { marginBottom: 10 },
+  energyPillActive: { backgroundColor: Colors.accentSoft },
+  energyPillText: { color: Colors.textSecondary, fontSize: 13, textTransform: "capitalize" },
+  energyPillTextActive: { color: Colors.accent, fontWeight: "600" },
+  projectScroll: { marginBottom: 12 },
   projectPill: {
-    paddingVertical: 6,
-    paddingHorizontal: 14,
-    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 12,
     backgroundColor: Colors.bgCardAlt,
-    borderWidth: 1,
-    borderColor: Colors.border,
     marginRight: 8
   },
-  projectPillActive: { backgroundColor: Colors.accentSoft, borderColor: Colors.accent },
-  projectPillText: { color: Colors.textSecondary, fontSize: 12 },
+  projectPillActive: { backgroundColor: Colors.accentSoft },
+  projectPillText: { color: Colors.textSecondary, fontSize: 13 },
+  projectPillTextActive: { color: Colors.accent, fontWeight: "600" },
   formActions: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     marginTop: 4
   },
-  cancelText: { color: Colors.textMuted, fontSize: 14 },
+  cancelText: { color: Colors.textMuted, fontSize: 15, fontWeight: "500" },
   saveButton: {
     backgroundColor: Colors.accent,
-    borderRadius: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 20
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 22
   },
-  saveButtonText: { color: "#fff", fontWeight: "700" },
-  addButton: { alignItems: "center", paddingVertical: 14, marginTop: 8 },
-  addButtonText: { color: Colors.accent, fontWeight: "700", fontSize: 15 },
+  saveButtonText: { color: "#fff", fontWeight: "700", fontSize: 15 },
+  addButton: { alignItems: "center", paddingVertical: 16, marginTop: 8 },
+  addButtonText: { color: Colors.accent, fontWeight: "700", fontSize: 16 },
 
   // Completed
   doneLabel: {
     color: Colors.textMuted,
-    fontSize: 12,
-    fontWeight: "700",
-    letterSpacing: 1.5,
-    marginTop: 24,
+    fontSize: 13,
+    fontWeight: "400",
+    letterSpacing: -0.08,
+    textTransform: "uppercase",
+    marginTop: 28,
     marginBottom: 10
+  },
+  doneCard: {
+    backgroundColor: Colors.bgCard,
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    ...CardShadow
   },
   doneRow: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 8,
-    gap: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border
+    paddingVertical: 12,
+    gap: 10
+  },
+  doneSeparator: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: Colors.separator
   },
   doneTitle: {
     flex: 1,
     color: Colors.textMuted,
-    fontSize: 14,
+    fontSize: 15,
     textDecorationLine: "line-through"
   },
-  doneMeta: { color: Colors.textMuted, fontSize: 12 }
+  doneMeta: { color: Colors.textMuted, fontSize: 13, fontVariant: ["tabular-nums"] }
 });
