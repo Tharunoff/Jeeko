@@ -1,6 +1,7 @@
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 import { executeTool, formatMinutes, type DataStore, type PlannedBlock, type Task } from "@personalos/core";
+import { getTodaysClassScheduleCache } from "../academia/classReminders";
 
 // A dedicated high-importance channel — without one, Android 8+ (and Realme's
 // ColorOS-based skin especially) can silently suppress notifications or show
@@ -16,7 +17,8 @@ const CHANNEL_ID = "jeeko-default";
  * don't feel like alarms going off. */
 Notifications.setNotificationHandler({
   handleNotification: async (notification) => {
-    const isReminder = notification.request.content.data?.type === "reminder";
+    const isReminder =
+      notification.request.content.data?.type === "reminder" || notification.request.content.data?.type === "class_reminder";
     return {
       shouldShowBanner: true,
       shouldShowList: true,
@@ -170,6 +172,37 @@ export async function scheduleNotifications(params: {
         },
         trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: reminder.triggerAt, channelId: CHANNEL_ID }
       });
+    }
+
+    // 4c. Class reminders — deterministic, no AI involved. 10 minutes before
+    // each of today's remaining classes, sourced from a locally cached
+    // schedule (see academia/classReminders.ts). No network call happens
+    // here; the cache is refreshed at most once a day, on app boot.
+    const classCache = await getTodaysClassScheduleCache(store, now);
+    if (classCache && !classCache.isHoliday) {
+      for (const cls of classCache.classes) {
+        const [h, m] = cls.from.split(":").map(Number);
+        const classStart = new Date(now);
+        classStart.setHours(h, m, 0, 0);
+        const triggerMs = classStart.getTime() - 10 * 60000 - now.getTime();
+        if (triggerMs < 10000) continue; // already started or about to
+
+        const attendanceText = cls.attendancePercent != null ? ` · Attendance: ${cls.attendancePercent}%` : "";
+        const details = [cls.room, cls.faculty].filter(Boolean).join(" · ");
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: `Class in 10 min: ${cls.title}`,
+            body: `${details}${attendanceText}`,
+            data: { type: "class_reminder", courseCode: cls.code },
+            sound: "default"
+          },
+          trigger: {
+            type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+            seconds: Math.floor(triggerMs / 1000),
+            channelId: CHANNEL_ID
+          }
+        });
+      }
     }
 
     // 4. Daily review prompt (schedule for sleep time - 30min)

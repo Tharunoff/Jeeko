@@ -10,6 +10,7 @@ import { requestNotificationPermissions, scheduleNotifications } from "../notifi
 import { DEV_DEFAULT_GEMINI_API_KEYS } from "../config/devDefaults";
 import { configureApiKeyPool, hasAnyApiKey, setKeyPoolPersistence, loadPersistedExhaustion } from "../llm/apiKeyPool";
 import { createAcademiaTools } from "../academia/academiaTools";
+import { ensureTodaysClassScheduleCache } from "../academia/classReminders";
 
 /** When Jeeko's answer is something better shown than said — a whole week's shape,
  * today's block-by-block schedule — the agent loop's tool calls already computed the
@@ -125,6 +126,16 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
       // Request notification permissions (best-effort)
       requestNotificationPermissions().catch(() => {});
+
+      // Refresh today's class schedule cache (network, at most once/day) so
+      // deterministic class reminders can be scheduled — no AI involved.
+      // Bumps version on success so the notification-scheduling effect below
+      // picks up the freshly cached schedule.
+      ensureTodaysClassScheduleCache(db, new Date())
+        .then(() => {
+          if (!cancelled) setVersion((v) => v + 1);
+        })
+        .catch(() => {});
     })();
     return () => {
       cancelled = true;
