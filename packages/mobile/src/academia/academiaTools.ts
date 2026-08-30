@@ -1,6 +1,12 @@
 import type { DataStore } from "@personalos/core";
 import type { ExternalTool } from "@personalos/core";
 import { fetchAcademiaData } from "./academiaClient";
+import { resolveSlotTimes } from "./timeGrid";
+
+function nowHHMM(): string {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
 
 /**
  * Mobile-only tool exposing the academia scraper to Jeeko — not part of
@@ -12,7 +18,7 @@ export function createAcademiaTools(store: DataStore): ExternalTool[] {
   const getAcademiaStatus: ExternalTool = {
     name: "get_academia_status",
     description:
-      "Gets the user's live SRM Academia data: registered courses, today's day order, and per-course + overall attendance percentage. Use when asked about classes, timetable, or attendance. Note: course slot codes (e.g. 'A1') are NOT mapped to clock times here — never state a specific time for a class from this tool's result alone.",
+      "Gets the user's live SRM Academia data: registered courses, today's day order, and per-course + overall attendance percentage. Also computes today's actual class schedule (clock times) and the next upcoming class using the fixed SRM period-time grid. Use when asked about classes, timetable, attendance, or 'when is my next class'.",
     parameters: { type: "object", properties: {} },
     handler: async () => {
       const email = await store.getPreference("academia_email");
@@ -41,10 +47,45 @@ export function createAcademiaTools(store: DataStore): ExternalTool[] {
         store.setPreference("academia_session", JSON.stringify(data.sessionData)).catch(() => {});
       }
 
+      // Compute today's actual clock-time schedule from the fixed SRM
+      // period grid (packages/mobile/src/academia/timeGrid.ts) — only
+      // possible when we have a real numeric day order.
+      let todaysSchedule: Array<{
+        code: string;
+        title: string;
+        faculty: string;
+        room: string;
+        type: string;
+        from: string;
+        to: string;
+      }> = [];
+      if (typeof data.dayOrder === "number") {
+        for (const c of data.courses) {
+          const ranges = resolveSlotTimes(data.dayOrder, c.slot);
+          for (const r of ranges) {
+            todaysSchedule.push({
+              code: c.course_code,
+              title: c.course_title,
+              faculty: c.faculty_name,
+              room: c.room_no,
+              type: c.course_type,
+              from: r.from,
+              to: r.to
+            });
+          }
+        }
+        todaysSchedule.sort((a, b) => a.from.localeCompare(b.from));
+      }
+      const currentTime = nowHHMM();
+      const nextClass = todaysSchedule.find((s) => s.from > currentTime) ?? null;
+
       return {
         dayOrder: data.dayOrder,
         isHoliday: data.isHoliday,
         overallAttendancePercent: data.overallAttendance,
+        currentTime,
+        todaysSchedule,
+        nextClass,
         courses: data.courses.map((c) => ({
           code: c.course_code,
           title: c.course_title,
@@ -61,7 +102,7 @@ export function createAcademiaTools(store: DataStore): ExternalTool[] {
           hoursAbsent: c.hours_absent
         })),
         note:
-          "Slot codes are not mapped to actual clock times in this app yet — tell the user which slot/day-order a class is in, but do not invent a specific time for it. If dayOrder is null and isHoliday is true, the portal shows no day order and looks like a holiday/off day — tell the user that (as a likely guess, not certain) rather than saying classes are on. If dayOrder is null and isHoliday is false, the portal just didn't report a day order right now — say you couldn't determine today's day order, don't guess one."
+          "todaysSchedule and nextClass are computed from a fixed SRM period-time grid and ARE real clock times — safe to state directly (e.g. 'your next class is Computer Networks at 1:25pm'). If todaysSchedule is empty but courses exist, a slot code couldn't be resolved — say you're not sure of the exact time rather than guessing. If dayOrder is null and isHoliday is true, today looks like a holiday/off day (word it as a guess, not certain) — no schedule can be computed. If dayOrder is null and isHoliday is false, say you couldn't determine today's day order right now."
       };
     }
   };
