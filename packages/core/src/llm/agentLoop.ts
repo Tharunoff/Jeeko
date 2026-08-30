@@ -1,4 +1,4 @@
-import type { AssistantContext, LLMProvider, Message } from "../types/index";
+import type { AssistantContext, LLMProvider, Message, ToolDeclaration } from "../types/index";
 import type { DataStore } from "../store/DataStore";
 import { ALL_TOOLS, executeTool, toolDeclarations } from "./tools";
 
@@ -8,6 +8,18 @@ const FALLBACK_TEXT = "I don't have enough information to determine this accurat
 export interface AgentLoopResult {
   text: string;
   transcript: Message[];
+}
+
+/** A tool that isn't part of core's pure local-DataStore set — e.g. mobile's
+ * academia-portal integration, which needs a network call core deliberately
+ * has no access to. Kept as an injected callback (not a core import of
+ * `fetch`) so core stays free of any external dependency; the handler is
+ * whatever the caller provides. */
+export interface ExternalTool {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  handler: (args: any) => Promise<unknown>;
 }
 
 /**
@@ -24,10 +36,16 @@ export async function runAgentLoop(params: {
   store: DataStore;
   now: Date;
   maxRounds?: number;
+  externalTools?: ExternalTool[];
 }): Promise<AgentLoopResult> {
-  const { provider, store, now, context } = params;
+  const { provider, store, now, context, externalTools = [] } = params;
   const maxRounds = params.maxRounds ?? DEFAULT_MAX_ROUNDS;
-  const tools = toolDeclarations();
+  const externalDeclarations: ToolDeclaration[] = externalTools.map((t) => ({
+    name: t.name,
+    description: t.description,
+    parameters: t.parameters
+  }));
+  const tools = [...toolDeclarations(), ...externalDeclarations];
   const messages: Message[] = [...params.messages];
 
   for (let round = 0; round < maxRounds; round++) {
@@ -57,7 +75,8 @@ export async function runAgentLoop(params: {
     for (const call of response.toolCalls) {
       let toolResult: unknown;
       try {
-        toolResult = await executeTool(call.name, call.args, { store, now });
+        const external = externalTools.find((t) => t.name === call.name);
+        toolResult = external ? await external.handler(call.args) : await executeTool(call.name, call.args, { store, now });
       } catch (err) {
         toolResult = { error: err instanceof Error ? err.message : String(err) };
       }

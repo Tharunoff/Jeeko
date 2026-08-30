@@ -39,6 +39,8 @@ export function SettingsScreen({ onClose }: { onClose: () => void }) {
   const [offlineOnly, setOfflineOnly] = useState(false);
   const [saving, setSaving] = useState(false);
   const [reminders, setReminders] = useState<Reminder[]>([]);
+  const [academiaEmail, setAcademiaEmail] = useState("");
+  const [academiaPassword, setAcademiaPassword] = useState("");
 
   useEffect(() => {
     if (!store || !user) return;
@@ -50,6 +52,10 @@ export function SettingsScreen({ onClose }: { onClose: () => void }) {
       if (key) setApiKey(key);
       const offline = await store.getPreference("offline_only");
       setOfflineOnly(offline === "true");
+      const academiaE = await store.getPreference("academia_email");
+      if (academiaE) setAcademiaEmail(academiaE);
+      const academiaP = await store.getPreference("academia_password");
+      if (academiaP) setAcademiaPassword(academiaP);
     })();
     loadReminders();
   }, [store, user]);
@@ -104,6 +110,8 @@ export function SettingsScreen({ onClose }: { onClose: () => void }) {
     try {
       await store.setPreference("gemini_api_key", apiKey.trim());
       await store.setPreference("offline_only", offlineOnly ? "true" : "false");
+      await store.setPreference("academia_email", academiaEmail.trim());
+      await store.setPreference("academia_password", academiaPassword);
       await store.saveUser({
         ...user,
         name: name.trim() || user.name,
@@ -233,6 +241,39 @@ export function SettingsScreen({ onClose }: { onClose: () => void }) {
         <Text style={styles.sectionFooter}>
           Get a free key at ai.google.dev. The key is stored locally on your device only. When
           offline-only is enabled, the PA uses deterministic local engines — no API calls.
+        </Text>
+
+        {/* Academia portal — timetable/attendance, so Jeeko can answer "when's my next class" */}
+        <Text style={styles.sectionLabel}>ACADEMIA PORTAL</Text>
+        <View style={styles.card}>
+          <View style={styles.fieldRow}>
+            <Text style={styles.fieldLabel}>Portal email</Text>
+          </View>
+          <TextInput
+            style={styles.input}
+            value={academiaEmail}
+            onChangeText={setAcademiaEmail}
+            placeholder="your.email@srmist.edu.in"
+            placeholderTextColor={Colors.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="email-address"
+          />
+          <TextInput
+            style={[styles.input, { marginBottom: 4 }]}
+            value={academiaPassword}
+            onChangeText={setAcademiaPassword}
+            placeholder="Portal password"
+            placeholderTextColor={Colors.textMuted}
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        </View>
+        <Text style={styles.sectionFooter}>
+          Stored locally on your device only, sent directly to your own deployed scraper
+          (jeeko.onrender.com) when Jeeko needs your timetable or attendance — never to Google or
+          anywhere else.
         </Text>
 
         {/* Save */}

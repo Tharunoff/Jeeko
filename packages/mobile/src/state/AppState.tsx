@@ -9,6 +9,7 @@ import { tryOfflineIntent } from "../chat/offlineIntentMatcher";
 import { requestNotificationPermissions, scheduleNotifications } from "../notifications/scheduler";
 import { DEV_DEFAULT_GEMINI_API_KEYS } from "../config/devDefaults";
 import { configureApiKeyPool, hasAnyApiKey, setKeyPoolPersistence, loadPersistedExhaustion } from "../llm/apiKeyPool";
+import { createAcademiaTools } from "../academia/academiaTools";
 
 /** When Jeeko's answer is something better shown than said — a whole week's shape,
  * today's block-by-block schedule — the agent loop's tool calls already computed the
@@ -192,7 +193,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             provider,
             store,
             now: new Date(),
-            maxRounds: 6
+            maxRounds: 6,
+            externalTools: createAcademiaTools(store)
           });
           // Trigger refresh so screens pick up any state changes the tools made
           refresh();
