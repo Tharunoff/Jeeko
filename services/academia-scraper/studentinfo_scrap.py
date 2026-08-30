@@ -548,30 +548,40 @@ class AcademiaClient:
             print(f"✗ Failed to fetch timetable: {str(e)}\n")
             return None
         
-    def get_day_order(self) -> Optional[int]:
-        """Fetch current day order from welcome page"""
+    def get_day_order(self) -> dict:
+        """Fetch current day order from welcome page.
+
+        Returns {"day_order": int|None, "is_holiday": bool}. When the page
+        doesn't show a numeric day order (weekends, holidays, vacation), we
+        no longer fabricate one — callers must handle day_order=None. As a
+        best-effort signal we also flag is_holiday=True if the page text
+        mentions "holiday" near where the day order would be; this wording
+        hasn't been confirmed against a real holiday yet, so treat it as a
+        hint rather than certain until verified.
+        """
         print("Fetching day order...")
-        
+
         url = f'{self.BASE_URL}/srm_university/academia-academic-services/page/WELCOME'
-        
+
         try:
             response = self.session.get(url, headers=self._get_page_headers())
             response.raise_for_status()
-            
+
             # Search for day order pattern in the response
             match = re.search(r'Day Order:\s*(\d+)', response.text)
-            
+
             if match:
                 day_order = int(match.group(1))
                 print(f"✓ Day Order retrieved: {day_order}\n")
-                return day_order
+                return {"day_order": day_order, "is_holiday": False}
             else:
-                print("✗ Could not find day order in response\n")
-                return None
-                
+                is_holiday = bool(re.search(r'holiday', response.text, re.IGNORECASE))
+                print(f"✗ Could not find day order in response (is_holiday guess: {is_holiday})\n")
+                return {"day_order": None, "is_holiday": is_holiday}
+
         except Exception as e:
             print(f"✗ Failed to fetch day order: {str(e)}\n")
-            return None
+            return {"day_order": None, "is_holiday": False}
     
 #for loading and saving session data
     def get_session_data(self) -> dict:

@@ -34,6 +34,9 @@ export interface AcademiaAttendanceCourse {
 
 export interface AcademiaData {
   dayOrder: number | null;
+  /** Best-effort guess from the portal page text when no day order is
+   * shown — not confirmed accurate wording yet, treat as a hint. */
+  isHoliday: boolean;
   overallAttendance: number | null;
   attendanceByCourse: Record<string, AcademiaAttendanceCourse>;
   courses: AcademiaCourse[];
@@ -80,6 +83,7 @@ export async function fetchAcademiaData(email: string, password: string, cachedS
 
     return {
       dayOrder: typeof attendance.day_order === "number" ? attendance.day_order : null,
+      isHoliday: attendance.is_holiday === true,
       overallAttendance:
         typeof attendance.attendance?.overall_attendance === "number" ? attendance.attendance.overall_attendance : null,
       attendanceByCourse: attendance.attendance?.courses ?? {},

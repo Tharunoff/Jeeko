@@ -102,23 +102,24 @@ async def scrape_portal(request: LoginRequest):
             # Use cached attendance from session validation
             print("[DATA] Using attendance from session validation + fetching remaining data...")
             
-            day_order = client.get_day_order()
-            if not isinstance(day_order, int) or day_order <= 0:
-                day_order = 2
-            
+            day_order_info = client.get_day_order()
+            day_order = day_order_info["day_order"]
+            is_holiday = day_order_info["is_holiday"]
+
             timetable_data = client.get_timetable()
-            
+
             # Check if timetable parse failed
             timetable_failed = (
-                timetable_data and 
-                isinstance(timetable_data, dict) and 
+                timetable_data and
+                isinstance(timetable_data, dict) and
                 timetable_data.get('error') == "Could not parse HTML"
             )
-            
+
             if timetable_failed:
                 print("[RETRY] Parse failure detected - refetching all data with retry logic...")
                 result = fetch_all_data_with_retry(client, max_retries=2, save_debug_html=False)
                 day_order = result['day_order']
+                is_holiday = result['is_holiday']
                 attendance_data = result['attendance_data']
                 timetable_data = result['timetable_data']
             else:
@@ -127,6 +128,7 @@ async def scrape_portal(request: LoginRequest):
             # Fresh login - fetch all data with retry logic
             result = fetch_all_data_with_retry(client, max_retries=2, save_debug_html=False)
             day_order = result['day_order']
+            is_holiday = result['is_holiday']
             attendance_data = result['attendance_data']
             timetable_data = result['timetable_data']
 
@@ -149,6 +151,7 @@ async def scrape_portal(request: LoginRequest):
             attendance_data = {}
 
         attendance_data["day_order"] = day_order
+        attendance_data["is_holiday"] = is_holiday
 
         # Return session data for reuse
         session_data = client.get_session_data()

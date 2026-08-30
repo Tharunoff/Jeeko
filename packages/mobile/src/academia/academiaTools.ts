@@ -43,6 +43,7 @@ export function createAcademiaTools(store: DataStore): ExternalTool[] {
 
       return {
         dayOrder: data.dayOrder,
+        isHoliday: data.isHoliday,
         overallAttendancePercent: data.overallAttendance,
         courses: data.courses.map((c) => ({
           code: c.course_code,
@@ -60,7 +61,7 @@ export function createAcademiaTools(store: DataStore): ExternalTool[] {
           hoursAbsent: c.hours_absent
         })),
         note:
-          "Slot codes are not mapped to actual clock times in this app yet — tell the user which slot/day-order a class is in, but do not invent a specific time for it."
+          "Slot codes are not mapped to actual clock times in this app yet — tell the user which slot/day-order a class is in, but do not invent a specific time for it. If dayOrder is null and isHoliday is true, the portal shows no day order and looks like a holiday/off day — tell the user that (as a likely guess, not certain) rather than saying classes are on. If dayOrder is null and isHoliday is false, the portal just didn't report a day order right now — say you couldn't determine today's day order, don't guess one."
       };
     }
   };

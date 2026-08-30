@@ -36,6 +36,7 @@ def fetch_all_data_with_retry(client, max_retries: int = 2, save_debug_html: boo
                         "success": False,
                         "error": "Lookup failed during retry",
                         "day_order": None,
+                        "is_holiday": False,
                         "attendance_data": None,
                         "timetable_data": None
                     }
@@ -47,6 +48,7 @@ def fetch_all_data_with_retry(client, max_retries: int = 2, save_debug_html: boo
                         "success": False,
                         "error": f"Login failed during retry: {login_result.get('message')}",
                         "day_order": None,
+                        "is_holiday": False,
                         "attendance_data": None,
                         "timetable_data": None
                     }
@@ -60,6 +62,7 @@ def fetch_all_data_with_retry(client, max_retries: int = 2, save_debug_html: boo
                     "success": False,
                     "error": f"Re-authentication failed: {str(e)}",
                     "day_order": None,
+                    "is_holiday": False,
                     "attendance_data": None,
                     "timetable_data": None
                 }
@@ -67,16 +70,13 @@ def fetch_all_data_with_retry(client, max_retries: int = 2, save_debug_html: boo
         try:
             # --- DAY ORDER ---
             print("[DATA] Fetching day order...")
-            day_order = client.get_day_order()
+            day_order_info = client.get_day_order()
+            day_order = day_order_info["day_order"]
+            is_holiday = day_order_info["is_holiday"]
             if day_order is not None:
                 print(f"✓ [DATA] Day order retrieved: {day_order}")
             else:
-                print("⚠ [DATA] Day order not available from server")
-            
-            # Normalize day order
-            if not isinstance(day_order, int) or day_order <= 0:
-                print(f"⚠ [DATA] Invalid day order ({day_order}), defaulting to Day 4")
-                day_order = 4
+                print(f"⚠ [DATA] Day order not available from server (is_holiday guess: {is_holiday})")
 
             # --- ATTENDANCE ---
             print("[DATA] Fetching attendance data...")
@@ -139,19 +139,21 @@ def fetch_all_data_with_retry(client, max_retries: int = 2, save_debug_html: boo
                         "success": False,
                         "error": "Parse failures after retries",
                         "day_order": day_order,
+                        "is_holiday": is_holiday,
                         "attendance_data": attendance_data,
                         "timetable_data": timetable_data
                     }
-            
+
             # --- SUCCESS ---
             print("✓ [DATA] All data retrieved and parsed successfully")
             return {
                 "success": True,
                 "day_order": day_order,
+                "is_holiday": is_holiday,
                 "attendance_data": attendance_data,
                 "timetable_data": timetable_data
             }
-        
+
         except Exception as e:
             print(f"✗ [DATA] Fetch error on attempt {attempt + 1}: {e}")
             if attempt < max_retries - 1:
@@ -161,14 +163,16 @@ def fetch_all_data_with_retry(client, max_retries: int = 2, save_debug_html: boo
                     "success": False,
                     "error": f"Data fetch failed: {str(e)}",
                     "day_order": None,
+                    "is_holiday": False,
                     "attendance_data": None,
                     "timetable_data": None
                 }
-    
+
     return {
         "success": False,
         "error": "Max retries exceeded",
         "day_order": None,
+        "is_holiday": False,
         "attendance_data": None,
         "timetable_data": None
     }
