@@ -11,6 +11,8 @@ import { DEV_DEFAULT_GEMINI_API_KEYS } from "../config/devDefaults";
 import { configureApiKeyPool, hasAnyApiKey, setKeyPoolPersistence, loadPersistedExhaustion } from "../llm/apiKeyPool";
 import { createAcademiaTools } from "../academia/academiaTools";
 import { ensureTodaysClassScheduleCache } from "../academia/classReminders";
+import { createAlarmTools } from "../alarms/alarmTools";
+import { createCancelTools } from "../academia/cancelTools";
 
 /** When Jeeko's answer is something better shown than said — a whole week's shape,
  * today's block-by-block schedule — the agent loop's tool calls already computed the
@@ -205,7 +207,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             store,
             now: new Date(),
             maxRounds: 6,
-            externalTools: createAcademiaTools(store)
+            externalTools: [...createAcademiaTools(store), ...createAlarmTools(), ...createCancelTools(store)]
           });
           // Trigger refresh so screens pick up any state changes the tools made
           refresh();
