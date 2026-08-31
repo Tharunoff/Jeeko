@@ -82,6 +82,7 @@ export function createAcademiaTools(store: DataStore): ExternalTool[] {
       return {
         dayOrder: data.dayOrder,
         isHoliday: data.isHoliday,
+        isAttendanceAvailable: !data.isAttendanceMock,
         overallAttendancePercent: data.overallAttendance,
         currentTime,
         todaysSchedule,
@@ -102,7 +103,7 @@ export function createAcademiaTools(store: DataStore): ExternalTool[] {
           hoursAbsent: c.hours_absent
         })),
         note:
-          "todaysSchedule and nextClass are computed from a fixed SRM period-time grid and ARE real clock times — safe to state directly (e.g. 'your next class is Computer Networks at 1:25pm'). If todaysSchedule is empty but courses exist, a slot code couldn't be resolved — say you're not sure of the exact time rather than guessing. If dayOrder is null and isHoliday is true, today looks like a holiday/off day (word it as a guess, not certain) — no schedule can be computed. If dayOrder is null and isHoliday is false, say you couldn't determine today's day order right now."
+          "todaysSchedule and nextClass are computed from a fixed SRM period-time grid and ARE real clock times — safe to state directly (e.g. 'your next class is Computer Networks at 1:25pm'). If todaysSchedule is empty but courses exist, a slot code couldn't be resolved — say you're not sure of the exact time rather than guessing. If dayOrder is null and isHoliday is true, today looks like a holiday/off day (word it as a guess, not certain) — no schedule can be computed. If dayOrder is null and isHoliday is false, say you couldn't determine today's day order right now. If isAttendanceAvailable is false, the portal's real attendance page failed to load this time — overallAttendancePercent/attendanceByCourse are empty/null on purpose, NEVER say attendance is 0% or state any attendance number; tell the user attendance couldn't be fetched right now and to try again shortly."
       };
     }
   };

@@ -37,6 +37,12 @@ export interface AcademiaData {
   /** Best-effort guess from the portal page text when no day order is
    * shown — not confirmed accurate wording yet, treat as a hint. */
   isHoliday: boolean;
+  /** True when the real /My_Attendance fetch failed server-side and the
+   * scraper fell back to placeholder zeros derived from the timetable
+   * (see services/academia-scraper/tools/fallback_mock_attendance_data.py).
+   * When true, overallAttendance/attendanceByCourse below are already
+   * nulled out — never surface stale/fake numbers as real. */
+  isAttendanceMock: boolean;
   overallAttendance: number | null;
   attendanceByCourse: Record<string, AcademiaAttendanceCourse>;
   courses: AcademiaCourse[];
@@ -80,13 +86,19 @@ export async function fetchAcademiaData(email: string, password: string, cachedS
 
     const attendance = data.attendance ?? {};
     const timetable = data.timetable ?? {};
+    // is_mock defaults to true (not false) when absent — an older/unknown
+    // response shape should never be trusted as real attendance by default.
+    const isAttendanceMock = attendance.is_mock !== false;
 
     return {
       dayOrder: typeof attendance.day_order === "number" ? attendance.day_order : null,
       isHoliday: attendance.is_holiday === true,
+      isAttendanceMock,
       overallAttendance:
-        typeof attendance.attendance?.overall_attendance === "number" ? attendance.attendance.overall_attendance : null,
-      attendanceByCourse: attendance.attendance?.courses ?? {},
+        !isAttendanceMock && typeof attendance.attendance?.overall_attendance === "number"
+          ? attendance.attendance.overall_attendance
+          : null,
+      attendanceByCourse: isAttendanceMock ? {} : (attendance.attendance?.courses ?? {}),
       courses: timetable.courses ?? [],
       sessionData: data.session_data
     };

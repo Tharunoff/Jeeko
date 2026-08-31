@@ -517,16 +517,24 @@ class AcademiaClient:
     def get_attendance(self) -> Optional[Dict[str, Any]]:
         """Fetch and parse attendance data"""
         print("Fetching attendance data...")
-        
+
         url = f'{self.BASE_URL}/srm_university/academia-academic-services/page/My_Attendance'
-        
+
         try:
             response = self.session.get(url, headers=self._get_page_headers())
+            if response.status_code != 200:
+                # TEMP DIAGNOSTIC: this endpoint has been silently 403ing for every
+                # request while sibling pages (timetable, day order) succeed on the
+                # exact same session — printing the real response body (not just
+                # raise_for_status()'s generic message) so we can see what SRM's
+                # server is actually saying instead of guessing at a fix.
+                print(f"✗ Attendance fetch got status {response.status_code}. Response body (first 1000 chars):")
+                print(response.text[:1000])
             response.raise_for_status()
-            
+
             print(f"✓ Attendance data retrieved (Status: {response.status_code})\n")
             return parse_attendance(response.text)
-                
+
         except Exception as e:
             print(f"✗ Failed to fetch attendance: {str(e)}\n")
             return None

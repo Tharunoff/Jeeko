@@ -43,9 +43,10 @@ def parse_attendance(html_content: str) -> Dict[str, Any]:
             "total_hours_absent": 0
         },
         "marks": {},
-        "summary": {}
+        "summary": {},
+        "is_mock": False
     }
-    
+
     # Parse student information
     info_rows = soup.find_all('tr')
     for row in info_rows:

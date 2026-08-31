@@ -58,4 +58,9 @@ def generate_mock_attendance_from_timetable(timetable_data):
         },
         "marks": mock_marks,
         "summary": {},
+        # These are placeholder zeros, not real attendance — the real
+        # /My_Attendance fetch failed (see get_attendance() in
+        # studentinfo_scrap.py). Callers MUST check this flag and never
+        # present these numbers as actual attendance.
+        "is_mock": True,
     }
