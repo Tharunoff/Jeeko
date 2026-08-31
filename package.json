@@ -7,7 +7,8 @@
   ],
   "scripts": {
     "test": "npm run test -w packages/core",
-    "test:watch": "npm run test:watch -w packages/core"
+    "test:watch": "npm run test:watch -w packages/core",
+    "postinstall": "patch-package"
   },
   "overrides": {
     "expo-asset": "~12.0.13",
@@ -19,5 +20,8 @@
     "@expo/vector-icons": {
       "expo-font": "~14.0.12"
     }
+  },
+  "devDependencies": {
+    "patch-package": "^8.0.1"
   }
 }

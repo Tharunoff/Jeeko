@@ -74,4 +74,74 @@ describe("tools (integration through InMemoryStore)", () => {
   it("throws a clear error for an unknown tool rather than silently doing nothing", async () => {
     await expect(executeTool("not_a_real_tool", {}, { store, now: TEST_DATE })).rejects.toThrow(/Unknown tool/);
   });
+
+  // create_reminder used to take a full ISO date-time string that the LLM had to
+  // compute itself — a real production bug (a "tomorrow at 9am" reminder landing
+  // at 2:30pm with no error) traced back to exactly that. It now takes hour/
+  // minute/day (or a relative inMinutes) and does all the date math here,
+  // deterministically — these tests are what should catch a regression back to
+  // that failure mode.
+  describe("create_reminder resolves time deterministically (no LLM date arithmetic)", () => {
+    it("inMinutes sets an exact delta from now", async () => {
+      const { reminder } = (await executeTool(
+        "create_reminder",
+        { title: "Check oven", inMinutes: 10 },
+        { store, now: TEST_DATE }
+      )) as any;
+      expect(reminder.triggerAt.getTime()).toBe(TEST_DATE.getTime() + 10 * 60000);
+    });
+
+    it("hour/minute with day:'tomorrow' lands exactly one day ahead at that clock time", async () => {
+      const { reminder } = (await executeTool(
+        "create_reminder",
+        { title: "CN experiment 6", hour: 9, minute: 0, day: "tomorrow" },
+        { store, now: TEST_DATE }
+      )) as any;
+      const expected = new Date(TEST_DATE);
+      expected.setDate(expected.getDate() + 1);
+      expected.setHours(9, 0, 0, 0);
+      expect(reminder.triggerAt.getTime()).toBe(expected.getTime());
+    });
+
+    it("hour/minute with no day rolls to tomorrow if that clock time already passed today", async () => {
+      const now = new Date(TEST_DATE);
+      now.setHours(14, 0, 0, 0); // 2pm local
+      const { reminder } = (await executeTool(
+        "create_reminder",
+        { title: "Morning reminder", hour: 9, minute: 0 },
+        { store, now }
+      )) as any;
+      expect(reminder.triggerAt.getTime()).toBeGreaterThan(now.getTime());
+      expect(reminder.triggerAt.getDate()).toBe(now.getDate() + 1);
+      expect(reminder.triggerAt.getHours()).toBe(9);
+    });
+
+    it("hour/minute with no day stays today if that clock time hasn't passed yet", async () => {
+      const now = new Date(TEST_DATE);
+      now.setHours(8, 0, 0, 0); // 8am local
+      const { reminder } = (await executeTool(
+        "create_reminder",
+        { title: "Later today", hour: 9, minute: 0 },
+        { store, now }
+      )) as any;
+      expect(reminder.triggerAt.getDate()).toBe(now.getDate());
+      expect(reminder.triggerAt.getHours()).toBe(9);
+    });
+
+    it("rejects a call that gives neither inMinutes nor hour+minute", async () => {
+      await expect(
+        executeTool("create_reminder", { title: "Ambiguous" }, { store, now: TEST_DATE })
+      ).rejects.toThrow();
+    });
+
+    it("rejects a call that gives both inMinutes and hour+minute", async () => {
+      await expect(
+        executeTool(
+          "create_reminder",
+          { title: "Conflicting", inMinutes: 5, hour: 9, minute: 0 },
+          { store, now: TEST_DATE }
+        )
+      ).rejects.toThrow();
+    });
+  });
 });

@@ -11,13 +11,14 @@ import {
   View
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAudioRecorder, AudioModule } from "expo-audio";
 import { File } from "expo-file-system";
 import type { Message } from "@personalos/core";
 import { useAppState, type RichData } from "../state/AppState";
 import { Colors, CardShadow, SmallShadow } from "../theme/colors";
 import { VOICE_RECORDING_OPTIONS, voiceMimeTypeForPlatform } from "../voice/recordingOptions";
-import { speak, stopSpeaking } from "../voice/speech";
+import { speak, stopSpeaking, speakThinkingFiller } from "../voice/speech";
 import { PressableScale } from "../components/PressableScale";
 import { FadeInUp } from "../components/FadeInUp";
 import { VoiceOrb } from "../components/VoiceOrb";
@@ -55,6 +56,10 @@ function formatDuration(ms: number) {
 
 export function ChatScreen({ onClose }: { onClose: () => void }) {
   const { chat, hasGemini, refresh, store, user } = useAppState();
+  // Presented as a full-screen Modal (see App.tsx) — Modals aren't covered by
+  // the root SafeAreaView, so the input bar needs its own bottom inset or it
+  // sits underneath 3-button Android nav bars the same way the tab bar did.
+  const insets = useSafeAreaInsets();
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: "welcome",
@@ -113,6 +118,12 @@ export function ChatScreen({ onClose }: { onClose: () => void }) {
     startDotAnimation();
     setMessages((m) => [...m, userMsg]);
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
+
+    // Voice mode has no visible "typing" indicator to look at while a tool
+    // call round-trip runs — an instant on-device filler keeps it from
+    // feeling dead. The real reply below (speak()) interrupts it the moment
+    // it's ready, so this never delays the actual answer.
+    if (userMsg.wasVoice) speakThinkingFiller();
 
     try {
       const result = await chat(chatInput, history);
@@ -350,13 +361,13 @@ export function ChatScreen({ onClose }: { onClose: () => void }) {
 
       {/* Input */}
       {isRecording ? (
-        <View style={styles.recordingRow}>
+        <View style={[styles.recordingRow, { paddingBottom: styles.recordingRow.padding + insets.bottom }]}>
           <Animated.View style={[styles.recordingDot, { transform: [{ scale: pulseAnim }] }]} />
           <Text style={styles.recordingText}>Listening… {formatDuration(recordingMs)}</Text>
           <Text style={styles.recordingHint}>Release to send</Text>
         </View>
       ) : (
-        <View style={styles.inputRow}>
+        <View style={[styles.inputRow, { paddingBottom: styles.inputRow.padding + insets.bottom }]}>
           <TextInput
             style={styles.input}
             placeholder="Tell Jeeko what's happening…"

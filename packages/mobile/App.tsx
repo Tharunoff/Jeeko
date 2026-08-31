@@ -1,5 +1,6 @@
 import React, { useRef, useState } from "react";
-import { Animated, Modal, SafeAreaView, StatusBar, StyleSheet, Text, View } from "react-native";
+import { Animated, Modal, StatusBar, StyleSheet, Text, View } from "react-native";
+import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import { AppStateProvider } from "./src/state/AppState";
 import { HomeScreen } from "./src/screens/HomeScreen";
@@ -28,6 +29,13 @@ function MainNavigator() {
   const [chatOpen, setChatOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
+  // react-native's built-in SafeAreaView doesn't apply real insets on
+  // Android — it silently no-ops, which is why the tab bar sat underneath
+  // 3-button nav bars (their inset is much taller than gesture nav's,
+  // where the gap happened to be small enough to go unnoticed). Padding
+  // the tab bar with the real bottom inset from react-native-safe-area-context
+  // fixes that on every nav style, not just gesture nav.
+  const insets = useSafeAreaInsets();
 
   const fade = useRef(new Animated.Value(1)).current;
 
@@ -39,7 +47,7 @@ function MainNavigator() {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
       <StatusBar barStyle="light-content" backgroundColor={Colors.bg} />
 
       {/* Top header bar — clean, minimal */}
@@ -64,8 +72,11 @@ function MainNavigator() {
         {tab === "review" && <ReviewScreen />}
       </Animated.View>
 
-      {/* Bottom tab bar — Apple-style with labels */}
-      <View style={styles.tabBar}>
+      {/* Bottom tab bar — Apple-style with labels. Not covered by the
+          SafeAreaView above (edges omits "bottom") so its background can
+          extend all the way to the screen edge; insets.bottom instead pads
+          its actual content above the system nav bar, whichever style. */}
+      <View style={[styles.tabBar, { paddingBottom: styles.tabBar.paddingBottom + insets.bottom }]}>
         {TABS.map((t) => {
           const isActive = tab === t.key;
           return (
@@ -109,9 +120,11 @@ function MainNavigator() {
 
 export default function App() {
   return (
-    <AppStateProvider>
-      <MainNavigator />
-    </AppStateProvider>
+    <SafeAreaProvider>
+      <AppStateProvider>
+        <MainNavigator />
+      </AppStateProvider>
+    </SafeAreaProvider>
   );
 }
 

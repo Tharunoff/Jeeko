@@ -1,0 +1,37 @@
+diff --git a/node_modules/expo-intent-launcher/android/src/main/java/expo/modules/intentlauncher/IntentLauncherModule.kt b/node_modules/expo-intent-launcher/android/src/main/java/expo/modules/intentlauncher/IntentLauncherModule.kt
+index 56bd930..c7a6000 100644
+--- a/node_modules/expo-intent-launcher/android/src/main/java/expo/modules/intentlauncher/IntentLauncherModule.kt
++++ b/node_modules/expo-intent-launcher/android/src/main/java/expo/modules/intentlauncher/IntentLauncherModule.kt
+@@ -61,11 +61,29 @@ class IntentLauncherModule : Module() {
+         }
+       }
+ 
+-      params.extra?.let {
+-        val valuesList = it.mapValues { (_, value) ->
++      params.extra?.let { extra ->
++        // PATCHED (Jeeko): bundleOf() (used by the original .toBundle() below)
++        // has no branch for List/ArrayList — a JS number array (e.g. Android's
++        // AlarmClock.EXTRA_DAYS for a recurring alarm) silently falls through
++        // to putSerializable(), which Intent.getIntegerArrayListExtra() can't
++        // read back. That made every "daily" alarm request silently become a
++        // one-time alarm with no error surfaced anywhere. Handle number-list
++        // extras explicitly via putIntegerArrayList, which is what the
++        // AlarmClock contract (and similar list-typed intent extras) actually
++        // expects; everything else keeps the original behavior unchanged.
++        val scalarValues = extra.filterValues { it !is List<*> }.mapValues { (_, value) ->
+           if (value is Double) value.toInt() else value
+         }
+-        intent.putExtras(valuesList.toBundle())
++        val bundle = scalarValues.toBundle()
++        extra.forEach { (key, value) ->
++          if (value is List<*>) {
++            val ints = value.mapNotNull { (it as? Number)?.toInt() }
++            if (ints.size == value.size && ints.isNotEmpty()) {
++              bundle.putIntegerArrayList(key, ArrayList(ints))
++            }
++          }
++        }
++        intent.putExtras(bundle)
+       }
+       params.flags?.let { intent.addFlags(it) }
+       params.category?.let { intent.addCategory(it) }

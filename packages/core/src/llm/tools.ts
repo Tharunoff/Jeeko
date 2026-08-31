@@ -813,26 +813,60 @@ const saveMemory: ToolDefinition<z.infer<typeof saveMemorySchema>> = {
 // only persists the reminder; the mobile app turns each un-fired one into a
 // real local notification (see notifications/scheduler.ts) whenever the store
 // changes, the same way plan-derived notifications already get scheduled.
-const createReminderSchema = z.object({
-  title: z.string().min(1),
-  triggerAt: z.string()
-});
+//
+// Deliberately NOT a free-form ISO date-time string: an earlier version had
+// the model compute the full absolute timestamp itself ("tomorrow at 9am" ->
+// ISO string), which is real date arithmetic against an ISO-with-timezone
+// "now" — exactly the kind of thing a fast/lite model gets subtly wrong
+// under time pressure (confirmed in production: "remind me tomorrow at 9am"
+// landed at 2:30pm with no error surfaced). Splitting into hour/minute (24h,
+// so AM/PM is never ambiguous to parse) + day + an explicit relative-minutes
+// path means the model only ever does trivial extraction ("9am" -> hour 9),
+// never arithmetic — the actual date math happens once, deterministically,
+// here.
+const createReminderSchema = z
+  .object({
+    title: z.string().min(1),
+    // Absolute clock time, 24-hour — use for "at 7am", "tomorrow at 9pm".
+    hour: z.number().int().min(0).max(23).optional(),
+    minute: z.number().int().min(0).max(59).optional(),
+    day: z.enum(["today", "tomorrow"]).optional(),
+    // Relative delta from now — use for "in 10 minutes", "in 2 hours".
+    inMinutes: z.number().int().positive().optional()
+  })
+  .refine((v) => (v.inMinutes !== undefined) !== (v.hour !== undefined && v.minute !== undefined), {
+    message: "Provide either inMinutes, or both hour and minute together — not neither, not both."
+  });
 const createReminder: ToolDefinition<z.infer<typeof createReminderSchema>> = {
   name: "create_reminder",
   description:
-    "Sets a standalone alarm/reminder for a specific point in time (not a task — no capacity or priority involved). Use for things like \"remind me to X at 5pm\" or \"set an alarm for 7am tomorrow\". triggerAt must be an absolute ISO 8601 date-time — resolve relative phrases like \"in 10 minutes\" or \"tomorrow at 7am\" against the current time given in context yourself before calling this.",
+    'Sets a standalone alarm/reminder for a specific point in time (not a task — no capacity or priority involved). For a relative time ("remind me in 10 minutes", "in 2 hours"), pass inMinutes. For a clock time ("remind me at 5pm", "set an alarm for 7am tomorrow"), pass hour (0-23, 24-hour format — convert 12-hour/AM-PM yourself, e.g. "5pm" -> 17) and minute, plus day:"tomorrow" only if explicitly said; omit day for "today" (if that clock time has already passed today, it rolls to tomorrow automatically). If the user gave a time with no AM/PM and it is genuinely ambiguous from context, ask which they meant instead of guessing.',
   parameters: {
     type: "object",
     properties: {
       title: { type: "string" },
-      triggerAt: { type: "string", format: "date-time" }
+      hour: { type: "integer", minimum: 0, maximum: 23, description: "24-hour format" },
+      minute: { type: "integer", minimum: 0, maximum: 59 },
+      day: { type: "string", enum: ["today", "tomorrow"] },
+      inMinutes: { type: "integer", minimum: 1, description: "Minutes from now — alternative to hour/minute" }
     },
-    required: ["title", "triggerAt"]
+    required: ["title"]
   },
   schema: createReminderSchema,
   handler: async (args, ctx) => {
-    const triggerAt = new Date(args.triggerAt);
-    if (Number.isNaN(triggerAt.getTime())) throw new Error(`"${args.triggerAt}" isn't a valid date-time.`);
+    let triggerAt: Date;
+    if (args.inMinutes !== undefined) {
+      triggerAt = new Date(ctx.now.getTime() + args.inMinutes * 60000);
+    } else {
+      triggerAt = new Date(ctx.now);
+      if (args.day === "tomorrow") triggerAt.setDate(triggerAt.getDate() + 1);
+      triggerAt.setHours(args.hour!, args.minute!, 0, 0);
+      // "remind me at 7am" with no explicit day, said after 7am, naturally
+      // means tomorrow rather than a reminder that's already in the past.
+      if (!args.day && triggerAt.getTime() <= ctx.now.getTime()) {
+        triggerAt.setDate(triggerAt.getDate() + 1);
+      }
+    }
     const reminder: Reminder = {
       id: generateId("reminder"),
       title: args.title,

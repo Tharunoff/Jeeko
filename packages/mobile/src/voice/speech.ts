@@ -99,6 +99,23 @@ export function speak(text: string, callbacks?: { onDone?: () => void; onStart?:
   })();
 }
 
+const FILLER_PHRASES = ["One sec.", "Let me check.", "Give me a moment.", "On it.", "One moment."];
+
+/**
+ * Speaks an immediate, on-device-only acknowledgment — no Gemini round trip,
+ * so it actually starts within milliseconds rather than waiting on a network
+ * call the way speak() does. Meant to fill the silence while a real reply is
+ * still being computed (tool calls especially can take a couple seconds),
+ * so voice mode doesn't feel dead. The real reply's speak() call stops this
+ * automatically when it's ready, same as it would interrupt itself.
+ */
+export function speakThinkingFiller(): void {
+  const phrase = FILLER_PHRASES[Math.floor(Math.random() * FILLER_PHRASES.length)];
+  Speech.stop();
+  stopGeminiPlayback();
+  speakOnDevice(phrase);
+}
+
 export function stopSpeaking(): void {
   Speech.stop();
   stopGeminiPlayback();
