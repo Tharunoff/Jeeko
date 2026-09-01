@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Feather } from "@expo/vector-icons";
-import { executeTool, formatMinutes } from "@personalos/core";
+import { executeTool, formatMinutes, type PlannedBlock, type Task } from "@personalos/core";
 import { useAppState } from "../state/AppState";
 import { Colors, CardShadow } from "../theme/colors";
 import { PressableScale } from "../components/PressableScale";
+import { formatClock } from "../utils/format";
 
 interface DayData {
   key: string;
@@ -12,37 +13,47 @@ interface DayData {
   usable: number;
   committed: number;
   isToday: boolean;
+  blocks: PlannedBlock[];
+  unscheduledTaskIds: string[];
 }
 
 export function WeekScreen() {
-  const { store, ready, version } = useAppState();
+  const { store, ready, version, user } = useAppState();
   const [loading, setLoading] = useState(true);
   const [days, setDays] = useState<DayData[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [overloadWarnings, setOverloadWarnings] = useState<string[]>([]);
   const [weeklyWarning, setWeeklyWarning] = useState<string | undefined>();
   const [weeklyStats, setWeeklyStats] = useState<{
     totalCapacity: number;
     totalCommitted: number;
   } | null>(null);
-  const [expandedDay, setExpandedDay] = useState<string | null>(null);
+  // Today starts expanded — it's the day you actually care about walking in —
+  // everything else starts collapsed so the week doesn't turn into a wall of text.
+  const [expandedDay, setExpandedDay] = useState<string | null>("today");
 
   useEffect(() => {
     if (!store || !ready) return;
     let cancelled = false;
     setLoading(true);
     (async () => {
-      const result = (await executeTool("get_week_schedule", {}, { store, now: new Date() })) as any;
+      const [result, allTasks] = (await Promise.all([
+        executeTool("get_week_schedule", {}, { store, now: new Date() }),
+        store.listTasks()
+      ])) as [any, Task[]];
       if (cancelled) return;
 
-      const todayKey = Object.keys(result.days)[0]; // first day is today
       const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
       let totalCap = 0;
       let totalCommit = 0;
 
-      const dayEntries = Object.entries(result.days).map(([key, d]: [string, any], i) => {
+      const dayEntries: DayData[] = Object.entries(result.days).map(([key, d]: [string, any], i) => {
         const date = new Date(key + "T12:00:00");
         const usable = d.capacity.usableMinutes;
-        const committed = d.blocks.reduce((s: number, b: any) => s + b.durationMinutes, 0);
+        const blocks: PlannedBlock[] = [...(d.blocks ?? [])].sort(
+          (a: any, b: any) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime()
+        );
+        const committed = blocks.reduce((s, b) => s + b.durationMinutes, 0);
         totalCap += usable;
         totalCommit += committed;
         return {
@@ -50,20 +61,31 @@ export function WeekScreen() {
           dayName: i === 0 ? "Today" : i === 1 ? "Tomorrow" : dayNames[date.getDay()],
           usable,
           committed,
-          isToday: i === 0
+          isToday: i === 0,
+          blocks,
+          unscheduledTaskIds: d.unscheduledTaskIds ?? []
         };
       });
 
       setDays(dayEntries);
+      setTasks(allTasks);
       setOverloadWarnings(result.overloadWarnings.map((w: any) => w.message));
       setWeeklyWarning(result.weeklyOvercommitment.warning);
       setWeeklyStats({ totalCapacity: totalCap, totalCommitted: totalCommit });
       setLoading(false);
+      // Today is expanded by the placeholder key "today" above — swap it for
+      // today's real date key now that we know it, so the toggle logic below
+      // (which compares against real keys) works the first time it's tapped.
+      setExpandedDay((current) => (current === "today" ? dayEntries[0]?.key ?? null : current));
     })();
     return () => {
       cancelled = true;
     };
   }, [store, ready, version]);
+
+  function titleFor(taskId: string): string {
+    return tasks.find((t) => t.id === taskId)?.title ?? "Untitled task";
+  }
 
   if (loading) {
     return (
@@ -120,11 +142,13 @@ export function WeekScreen() {
         const pct = d.usable > 0 ? Math.min(1, d.committed / d.usable) : 0;
         const over = d.committed > d.usable;
         const remaining = Math.max(0, d.usable - d.committed);
+        const isExpanded = expandedDay === d.key;
+        const isFree = d.blocks.length === 0 && d.unscheduledTaskIds.length === 0;
         return (
           <PressableScale
             key={d.key}
             style={[styles.dayCard, d.isToday && styles.dayCardToday]}
-            onPress={() => setExpandedDay(expandedDay === d.key ? null : d.key)}
+            onPress={() => setExpandedDay(isExpanded ? null : d.key)}
             haptic="selection"
             activeScale={0.98}
           >
@@ -141,6 +165,12 @@ export function WeekScreen() {
                 </Text>
                 <Text style={styles.daySlash}>/</Text>
                 <Text style={styles.dayUsable}>{formatMinutes(d.usable)}</Text>
+                <Feather
+                  name={isExpanded ? "chevron-up" : "chevron-down"}
+                  size={16}
+                  color={Colors.textMuted}
+                  style={{ marginLeft: 6 }}
+                />
               </View>
             </View>
 
@@ -161,22 +191,47 @@ export function WeekScreen() {
               />
             </View>
 
-            {/* Expanded detail */}
-            {expandedDay === d.key && (
+            {/* Expanded detail — what's actually scheduled, at what time, and
+                what didn't fit. This is the whole point of opening a day. */}
+            {isExpanded && (
               <View style={styles.dayDetail}>
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Remaining</Text>
-                  <Text style={styles.detailValue}>{formatMinutes(remaining)}</Text>
-                </View>
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Load</Text>
-                  <Text style={[
-                    styles.detailValue,
-                    over && { color: Colors.danger }
-                  ]}>
-                    {Math.round(pct * 100)}%
-                  </Text>
-                </View>
+                {isFree ? (
+                  <Text style={styles.emptyText}>Nothing scheduled — fully free.</Text>
+                ) : (
+                  <>
+                    {d.blocks.map((b) => (
+                      <View key={b.id} style={styles.blockRow}>
+                        <Text style={styles.blockTime}>
+                          {formatClock(new Date(b.startTime), user?.timezone ?? "UTC")}
+                          {" – "}
+                          {formatClock(new Date(b.endTime), user?.timezone ?? "UTC")}
+                        </Text>
+                        <Text style={styles.blockTitle} numberOfLines={1}>
+                          {titleFor(b.taskId)}
+                        </Text>
+                        <Text style={styles.blockDuration}>{formatMinutes(b.durationMinutes)}</Text>
+                      </View>
+                    ))}
+
+                    {d.unscheduledTaskIds.length > 0 && (
+                      <View style={styles.unscheduledBlock}>
+                        <Text style={styles.unscheduledLabel}>
+                          Didn't fit today ({d.unscheduledTaskIds.length}):
+                        </Text>
+                        {d.unscheduledTaskIds.map((id) => (
+                          <Text key={id} style={styles.unscheduledItem} numberOfLines={1}>
+                            • {titleFor(id)}
+                          </Text>
+                        ))}
+                      </View>
+                    )}
+
+                    <View style={styles.detailRow}>
+                      <Text style={styles.detailLabel}>Remaining free time</Text>
+                      <Text style={styles.detailValue}>{formatMinutes(remaining)}</Text>
+                    </View>
+                  </>
+                )}
               </View>
             )}
           </PressableScale>
@@ -253,7 +308,7 @@ const styles = StyleSheet.create({
   dayNameRow: { flexDirection: "column" },
   dayLabel: { color: Colors.textPrimary, fontSize: 17, fontWeight: "600", letterSpacing: -0.4 },
   dayDate: { color: Colors.textMuted, fontSize: 12, marginTop: 2 },
-  dayStats: { flexDirection: "row", alignItems: "baseline" },
+  dayStats: { flexDirection: "row", alignItems: "center" },
   dayCommitted: { color: Colors.textPrimary, fontSize: 17, fontWeight: "700", fontVariant: ["tabular-nums"] },
   daySlash: { color: Colors.textMuted, fontSize: 15, marginHorizontal: 3 },
   dayUsable: { color: Colors.textMuted, fontSize: 15, fontVariant: ["tabular-nums"] },
@@ -266,8 +321,29 @@ const styles = StyleSheet.create({
   barFill: { height: 8, borderRadius: 4 },
 
   // Expanded detail
-  dayDetail: { marginTop: 14, gap: 6 },
-  detailRow: { flexDirection: "row", justifyContent: "space-between" },
+  dayDetail: { marginTop: 14, gap: 8 },
+  emptyText: { color: Colors.textMuted, fontSize: 14, fontStyle: "italic" },
+  blockRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  blockTime: { color: Colors.textMuted, fontSize: 12, width: 110, fontVariant: ["tabular-nums"] },
+  blockTitle: { flex: 1, color: Colors.textPrimary, fontSize: 14 },
+  blockDuration: { color: Colors.textMuted, fontSize: 12, fontVariant: ["tabular-nums"] },
+  unscheduledBlock: {
+    marginTop: 4,
+    paddingTop: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.separator,
+    gap: 3
+  },
+  unscheduledLabel: { color: Colors.warning, fontSize: 12, fontWeight: "600" },
+  unscheduledItem: { color: Colors.textSecondary, fontSize: 13 },
+  detailRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 4,
+    paddingTop: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.separator
+  },
   detailLabel: { color: Colors.textMuted, fontSize: 14 },
   detailValue: { color: Colors.textPrimary, fontSize: 14, fontWeight: "600", fontVariant: ["tabular-nums"] }
 });
