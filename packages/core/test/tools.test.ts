@@ -75,6 +75,29 @@ describe("tools (integration through InMemoryStore)", () => {
     await expect(executeTool("not_a_real_tool", {}, { store, now: TEST_DATE })).rejects.toThrow(/Unknown tool/);
   });
 
+  it("delete_goal removes a goal; delete_project removes a project", async () => {
+    const { goal } = (await executeTool("create_goal", { title: "Get fit" }, { store, now: TEST_DATE })) as any;
+    const { project } = (await executeTool(
+      "create_project",
+      { title: "Couch to 5k", goalIds: [goal.id] },
+      { store, now: TEST_DATE }
+    )) as any;
+
+    expect(await store.listGoals()).toHaveLength(1);
+    expect(await store.listProjects()).toHaveLength(1);
+
+    await executeTool("delete_project", { id: project.id }, { store, now: TEST_DATE });
+    expect(await store.listProjects()).toHaveLength(0);
+
+    await executeTool("delete_goal", { id: goal.id }, { store, now: TEST_DATE });
+    expect(await store.listGoals()).toHaveLength(0);
+  });
+
+  it("delete_goal/delete_project throw a clear error for an unknown id rather than silently no-op'ing", async () => {
+    await expect(executeTool("delete_goal", { id: "nope" }, { store, now: TEST_DATE })).rejects.toThrow(/No goal/);
+    await expect(executeTool("delete_project", { id: "nope" }, { store, now: TEST_DATE })).rejects.toThrow(/No project/);
+  });
+
   // create_reminder used to take a full ISO date-time string that the LLM had to
   // compute itself — a real production bug (a "tomorrow at 9am" reminder landing
   // at 2:30pm with no error) traced back to exactly that. It now takes hour/

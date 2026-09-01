@@ -344,6 +344,24 @@ const updateGoal: ToolDefinition<z.infer<typeof updateGoalSchema>> = {
 };
 
 // ---------------------------------------------------------------------------
+// delete_goal
+// ---------------------------------------------------------------------------
+const deleteGoalSchema = z.object({ id: z.string() });
+const deleteGoal: ToolDefinition<z.infer<typeof deleteGoalSchema>> = {
+  name: "delete_goal",
+  description:
+    "Permanently deletes a goal. Only call this when the user explicitly asks to delete/remove a goal — for a goal that's finished or no longer being pursued, prefer update_goal with status \"completed\"/\"cancelled\" instead, so the history isn't lost.",
+  parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+  schema: deleteGoalSchema,
+  handler: async (args, ctx) => {
+    const goal = await ctx.store.getGoal(args.id);
+    if (!goal) throw new Error(`No goal with id "${args.id}".`);
+    await ctx.store.deleteGoal(args.id);
+    return { deleted: args.id };
+  }
+};
+
+// ---------------------------------------------------------------------------
 // create_project / update_project
 // ---------------------------------------------------------------------------
 const createProjectSchema = z.object({
@@ -426,6 +444,24 @@ const updateProject: ToolDefinition<z.infer<typeof updateProjectSchema>> = {
     };
     await ctx.store.saveProject(updated);
     return { project: updated };
+  }
+};
+
+// ---------------------------------------------------------------------------
+// delete_project
+// ---------------------------------------------------------------------------
+const deleteProjectSchema = z.object({ id: z.string() });
+const deleteProject: ToolDefinition<z.infer<typeof deleteProjectSchema>> = {
+  name: "delete_project",
+  description:
+    "Permanently deletes a project. Only call this when the user explicitly asks to delete/remove a project — for one that's finished or dropped, prefer update_project with status \"completed\"/\"cancelled\" instead, so the history isn't lost.",
+  parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+  schema: deleteProjectSchema,
+  handler: async (args, ctx) => {
+    const project = await ctx.store.getProject(args.id);
+    if (!project) throw new Error(`No project with id "${args.id}".`);
+    await ctx.store.deleteProject(args.id);
+    return { deleted: args.id };
   }
 };
 
@@ -916,8 +952,10 @@ export const ALL_TOOLS: ToolDefinition<any>[] = [
   deleteTask,
   createGoal,
   updateGoal,
+  deleteGoal,
   createProject,
   updateProject,
+  deleteProject,
   createCalendarEvent,
   getTodaySchedule,
   getWeekSchedule,

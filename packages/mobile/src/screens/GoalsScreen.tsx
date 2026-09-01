@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Feather } from "@expo/vector-icons";
 import { executeTool, type Goal, type Project } from "@personalos/core";
 import { useAppState } from "../state/AppState";
 import { Colors, CardShadow } from "../theme/colors";
@@ -42,6 +43,47 @@ export function GoalsScreen() {
     refresh();
   }
 
+  function confirmDeleteGoal(goal: Goal) {
+    const projectCount = projects.filter((p) => p.goalIds.includes(goal.id)).length;
+    Alert.alert(
+      "Delete goal?",
+      projectCount > 0
+        ? `"${goal.title}" and its ${projectCount} project${projectCount > 1 ? "s" : ""} will be permanently removed.`
+        : `"${goal.title}" will be permanently removed.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            if (!store) return;
+            const goalProjects = projects.filter((p) => p.goalIds.includes(goal.id));
+            for (const p of goalProjects) {
+              await executeTool("delete_project", { id: p.id }, { store, now: new Date() });
+            }
+            await executeTool("delete_goal", { id: goal.id }, { store, now: new Date() });
+            refresh();
+          }
+        }
+      ]
+    );
+  }
+
+  function confirmDeleteProject(project: Project) {
+    Alert.alert("Delete project?", `"${project.title}" will be permanently removed.`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: async () => {
+          if (!store) return;
+          await executeTool("delete_project", { id: project.id }, { store, now: new Date() });
+          refresh();
+        }
+      }
+    ]);
+  }
+
   return (
     <ScrollView style={styles.screen} contentContainerStyle={{ padding: 20, paddingBottom: 50 }}>
       <Text style={styles.title}>Goals</Text>
@@ -66,8 +108,13 @@ export function GoalsScreen() {
                   <Text style={styles.weightText}>weight: {g.priorityWeight.toFixed(1)}</Text>
                 </View>
               </View>
-              <View style={styles.progressCircle}>
-                <Text style={styles.progressText}>{progressPct}%</Text>
+              <View style={styles.goalHeaderRight}>
+                <View style={styles.progressCircle}>
+                  <Text style={styles.progressText}>{progressPct}%</Text>
+                </View>
+                <PressableScale onPress={() => confirmDeleteGoal(g)} haptic="light" style={styles.deleteButton}>
+                  <Feather name="trash-2" size={15} color={Colors.textMuted} />
+                </PressableScale>
               </View>
             </View>
 
@@ -108,6 +155,9 @@ export function GoalsScreen() {
                           )}
                         </View>
                       </View>
+                      <PressableScale onPress={() => confirmDeleteProject(p)} haptic="light" style={styles.deleteButton}>
+                        <Feather name="trash-2" size={13} color={Colors.textMuted} />
+                      </PressableScale>
                     </View>
                     {idx < goalProjects.length - 1 && <View style={styles.projectSeparator} />}
                   </View>
@@ -200,6 +250,7 @@ const styles = StyleSheet.create({
   },
   goalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
   goalInfo: { flex: 1, marginRight: 14 },
+  goalHeaderRight: { flexDirection: "row", alignItems: "center", gap: 6 },
   goalTitle: { color: Colors.textPrimary, fontSize: 17, fontWeight: "600", letterSpacing: -0.4 },
   goalMeta: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 },
   weightText: { color: Colors.textMuted, fontSize: 12 },
@@ -250,12 +301,18 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingHorizontal: 14
   },
-  projectRow: { paddingVertical: 12 },
+  projectRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 12
+  },
   projectSeparator: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: Colors.separator
   },
-  projectContent: {},
+  projectContent: { flex: 1, marginRight: 10 },
+  deleteButton: { padding: 4 },
   projectTitle: { color: Colors.textSecondary, fontSize: 15, fontWeight: "500" },
   projectMeta: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 5 },
   deadlineText: { color: Colors.textMuted, fontSize: 12 },

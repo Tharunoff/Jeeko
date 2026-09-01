@@ -106,6 +106,16 @@ export function SettingsScreen({ onClose }: { onClose: () => void }) {
 
   async function save() {
     if (!store || !user) return;
+    // Wake/sleep time feed every capacity/free-time calculation in the app
+    // (capacityEngine's parseLocalTimeOnDate) via naive "HH:MM".split(":") —
+    // an unvalidated typo here doesn't error, it silently produces NaN that
+    // propagates through the whole day's schedule with nothing visibly wrong
+    // until numbers stop making sense. Catch it here instead.
+    const timePattern = /^([01]?\d|2[0-3]):[0-5]\d$/;
+    if (!timePattern.test(wakeTime.trim()) || !timePattern.test(sleepTime.trim())) {
+      Alert.alert("Invalid time", 'Wake and sleep time must be in 24-hour "HH:MM" format, e.g. "07:00" or "23:30".');
+      return;
+    }
     setSaving(true);
     try {
       await store.setPreference("gemini_api_key", apiKey.trim());
@@ -184,11 +194,15 @@ export function SettingsScreen({ onClose }: { onClose: () => void }) {
           </View>
         </View>
 
-        {/* Reminders/alarms — set via Jeeko ("remind me to X at 5pm"), managed here */}
+        {/* In-app reminders — set via Jeeko ("remind me to X at 5pm"), managed here.
+            Real alarms ("set an alarm for 7am") are a separate thing entirely — they
+            go straight into the phone's own Clock app, not this list, so this footer
+            has to say that explicitly or someone will set an "alarm" and never find it. */}
         <Text style={styles.sectionLabel}>REMINDERS</Text>
         {reminders.length === 0 ? (
           <Text style={styles.sectionFooter}>
-            None set. Ask Jeeko to "remind me to X at 5pm" or "set an alarm for 7am" and it'll show up here.
+            None set. Ask Jeeko to "remind me to X at 5pm" and it'll show up here. ("Set an alarm
+            for 7am" is different — that goes straight into your phone's Clock app instead.)
           </Text>
         ) : (
           <View style={styles.card}>
@@ -209,6 +223,11 @@ export function SettingsScreen({ onClose }: { onClose: () => void }) {
               </React.Fragment>
             ))}
           </View>
+        )}
+        {reminders.length > 0 && (
+          <Text style={styles.sectionFooter}>
+            Real alarms set with Jeeko live in your phone's Clock app instead — check there, not here.
+          </Text>
         )}
 
         {/* AI */}

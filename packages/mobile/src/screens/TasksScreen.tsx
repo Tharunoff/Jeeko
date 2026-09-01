@@ -11,6 +11,8 @@ import { Feather } from "@expo/vector-icons";
 import {
   executeTool,
   formatMinutes,
+  getAllDependents,
+  scoreTask,
   type Goal,
   type Project,
   type Task
@@ -95,14 +97,37 @@ export function TasksScreen() {
     refresh();
   }
 
+  function confirmDelete(task: Task) {
+    Alert.alert("Delete task?", `"${task.title}" will be permanently removed.`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: async () => {
+          if (!store) return;
+          await executeTool("delete_task", { id: task.id }, { store, now: new Date() });
+          refresh();
+        }
+      }
+    ]);
+  }
+
+  // Sorted by the same finalScore the priority engine actually uses for
+  // get_next_action/check_feasibility — a hand-rolled urgency+importance sum
+  // here used to silently disagree with what Jeeko says out loud is next,
+  // which is confusing (the list order should match the reasoning, not just
+  // approximate it).
+  const now = new Date();
   const active = tasks
     .filter((t) => t.status !== "completed" && t.status !== "cancelled")
-    .sort((a, b) => {
-      // Sort by urgency desc, then importance desc
-      const ua = (a.urgency ?? 0.5) + (a.importance ?? 0.5);
-      const ub = (b.urgency ?? 0.5) + (b.importance ?? 0.5);
-      return ub - ua;
-    });
+    .map((t) => {
+      const project = projects.find((p) => p.id === t.projectId);
+      const dependents = getAllDependents(t.id, tasks);
+      const score = scoreTask(t, { now, goals, project, dependents }).finalScore;
+      return { task: t, score };
+    })
+    .sort((a, b) => b.score - a.score)
+    .map((x) => x.task);
   const done = tasks.filter((t) => t.status === "completed");
 
   return (
@@ -183,6 +208,9 @@ export function TasksScreen() {
 
             {/* Actions */}
             <View style={styles.taskActions}>
+              <PressableScale onPress={() => confirmDelete(t)} haptic="light" style={styles.deleteAction}>
+                <Feather name="trash-2" size={14} color={Colors.textMuted} />
+              </PressableScale>
               <PressableScale onPress={() => deferToTomorrow(t)} haptic="light">
                 <Text style={styles.actionText}>Move to tomorrow</Text>
               </PressableScale>
@@ -348,7 +376,8 @@ const styles = StyleSheet.create({
   depTag: { color: Colors.textMuted, fontSize: 13 },
 
   // Actions
-  taskActions: { flexDirection: "row", justifyContent: "flex-end", marginTop: 12 },
+  taskActions: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 12 },
+  deleteAction: { padding: 4 },
   actionText: { color: Colors.accent, fontSize: 14, fontWeight: "500" },
 
   // Add form
