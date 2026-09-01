@@ -8,19 +8,21 @@ import { WeekScreen } from "./src/screens/WeekScreen";
 import { GoalsScreen } from "./src/screens/GoalsScreen";
 import { TasksScreen } from "./src/screens/TasksScreen";
 import { ReviewScreen } from "./src/screens/ReviewScreen";
+import { AttendanceScreen } from "./src/screens/AttendanceScreen";
 import { ChatScreen } from "./src/screens/ChatScreen";
 import { SettingsScreen } from "./src/screens/SettingsScreen";
 import { CalendarEventsEditor } from "./src/components/CalendarEventsEditor";
 import { PressableScale } from "./src/components/PressableScale";
 import { Colors } from "./src/theme/colors";
 
-type Tab = "home" | "week" | "goals" | "tasks" | "review";
+type Tab = "home" | "week" | "goals" | "tasks" | "attendance" | "review";
 
 const TABS: Array<{ key: Tab; label: string; icon: React.ComponentProps<typeof Feather>["name"] }> = [
   { key: "home", label: "Home", icon: "home" },
   { key: "week", label: "Week", icon: "calendar" },
   { key: "goals", label: "Goals", icon: "target" },
   { key: "tasks", label: "Tasks", icon: "check-square" },
+  { key: "attendance", label: "Attend.", icon: "award" },
   { key: "review", label: "Review", icon: "bar-chart-2" }
 ];
 
@@ -69,6 +71,7 @@ function MainNavigator() {
         {tab === "week" && <WeekScreen />}
         {tab === "goals" && <GoalsScreen />}
         {tab === "tasks" && <TasksScreen />}
+        {tab === "attendance" && <AttendanceScreen onOpenSettings={() => setSettingsOpen(true)} />}
         {tab === "review" && <ReviewScreen />}
       </Animated.View>
 

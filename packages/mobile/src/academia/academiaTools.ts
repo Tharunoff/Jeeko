@@ -1,14 +1,6 @@
 import type { DataStore } from "@personalos/core";
 import type { ExternalTool } from "@personalos/core";
-import { fetchAcademiaData } from "./academiaClient";
-import {
-  buildSnapshot,
-  saveSnapshot,
-  getTodaysClassScheduleCache,
-  localDateKey,
-  CACHE_KEY,
-  type CachedSchedule
-} from "./classReminders";
+import { fetchAndSaveSnapshot, getTodaysClassScheduleCache, getCachedSnapshotRaw, type CachedSchedule } from "./classReminders";
 
 function nowHHMM(): string {
   const d = new Date();
@@ -46,11 +38,11 @@ function respond(snapshot: CachedSchedule, source: "cache" | "live") {
  * access to (see agentLoop.ts's ExternalTool). Injected into runAgentLoop
  * from AppState.tsx's chat().
  *
- * Cache-first by design (see classReminders.ts's buildSnapshot/saveSnapshot):
- * the live scraper is slow (Render free-tier cold starts) and, per the user,
- * a portal outage shouldn't mean Jeeko can't answer at all when it already
- * knew the answer from this morning's refresh. Only forceRefresh:true (the
- * user explicitly asking for fresh/live/updated data) skips the cache.
+ * Cache-first by design (see classReminders.ts): the live scraper is slow
+ * (Render free-tier cold starts) and, per the user, a portal outage
+ * shouldn't mean Jeeko can't answer at all when it already knew the answer
+ * from this morning's refresh. Only forceRefresh:true (the user explicitly
+ * asking for fresh/live/updated data) skips the cache.
  */
 export function createAcademiaTools(store: DataStore): ExternalTool[] {
   const getAcademiaStatus: ExternalTool = {
@@ -67,12 +59,6 @@ export function createAcademiaTools(store: DataStore): ExternalTool[] {
       }
     },
     handler: async (args: { forceRefresh?: boolean }) => {
-      const email = await store.getPreference("academia_email");
-      const password = await store.getPreference("academia_password");
-      if (!email || !password) {
-        return { error: "Academia portal credentials aren't set up yet. Ask the user to add them in Settings → Academia Portal." };
-      }
-
       const now = new Date();
 
       if (!args.forceRefresh) {
@@ -83,41 +69,15 @@ export function createAcademiaTools(store: DataStore): ExternalTool[] {
         // answer instead of an error just because caching hasn't caught up.
       }
 
-      const cachedRaw = await store.getPreference("academia_session");
-      let cachedSession: unknown;
-      try {
-        cachedSession = cachedRaw ? JSON.parse(cachedRaw) : undefined;
-      } catch {
-        cachedSession = undefined;
-      }
-
-      const data = await fetchAcademiaData(email, password, cachedSession);
-      if (!data) {
+      const result = await fetchAndSaveSnapshot(store, now);
+      if ("error" in result) {
         // Live fetch failed — fall back to whatever's cached, even if it's
-        // from a previous day, rather than a bare error. Being honest with
-        // Jeeko about staleness is handled by dataAsOf in the note above.
-        const staleRaw = await store.getPreference(CACHE_KEY);
-        if (staleRaw) {
-          try {
-            const stale: CachedSchedule = JSON.parse(staleRaw);
-            return respond(stale, "cache");
-          } catch {
-            // fall through to the error below
-          }
-        }
-        return {
-          error:
-            "Couldn't reach the academia scraper or login failed, and there's no locally cached data to fall back on. The server may be cold-starting (free tier, up to a minute after being idle) — worth trying again shortly. If it keeps failing, the portal credentials in Settings may be wrong."
-        };
+        // from a previous day, rather than a bare error.
+        const stale = await getCachedSnapshotRaw(store);
+        if (stale) return respond(stale, "cache");
+        return { error: result.error };
       }
-
-      if (data.sessionData) {
-        store.setPreference("academia_session", JSON.stringify(data.sessionData)).catch(() => {});
-      }
-
-      const snapshot = await buildSnapshot(store, data, localDateKey(now));
-      await saveSnapshot(store, snapshot);
-      return respond(snapshot, "live");
+      return respond(result.snapshot, "live");
     }
   };
 

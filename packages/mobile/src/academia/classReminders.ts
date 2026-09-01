@@ -164,12 +164,55 @@ export async function saveSnapshot(store: DataStore, snapshot: CachedSchedule): 
   await syncClassesToCalendar(store, snapshot.date, snapshot.classes);
 }
 
+export type RefreshResult = { snapshot: CachedSchedule } | { error: string };
+
 /**
- * Fetches live academia data and caches the full snapshot (schedule +
- * attendance) locally — at most once per calendar day, so neither the
- * notification scheduler nor get_academia_status ever have to hit the
+ * Does a real live fetch and saves the result as today's snapshot — the one
+ * place this actually happens. Used by the boot-time daily refresh below,
+ * by get_academia_status's forceRefresh/no-cache-yet fallback, and by the
+ * Attendance screen's manual "Refresh now" button, so all three can never
+ * fetch or cache differently from each other.
+ */
+export async function fetchAndSaveSnapshot(store: DataStore, now: Date = new Date()): Promise<RefreshResult> {
+  const email = await store.getPreference("academia_email");
+  const password = await store.getPreference("academia_password");
+  if (!email || !password) {
+    return { error: "Academia portal credentials aren't set up yet — add them in Settings → Academia Portal." };
+  }
+
+  const sessionRaw = await store.getPreference("academia_session");
+  let session: unknown;
+  try {
+    session = sessionRaw ? JSON.parse(sessionRaw) : undefined;
+  } catch {
+    session = undefined;
+  }
+
+  const data = await fetchAcademiaData(email, password, session);
+  if (!data) {
+    return {
+      error:
+        "Couldn't reach the academia scraper or login failed. The server may be cold-starting (free tier, up to a minute after being idle) — try again shortly."
+    };
+  }
+
+  if (data.sessionData) {
+    store.setPreference("academia_session", JSON.stringify(data.sessionData)).catch(() => {});
+  }
+
+  const today = localDateKey(now);
+  const snapshot = await buildSnapshot(store, data, today);
+  await saveSnapshot(store, snapshot);
+  return { snapshot };
+}
+
+/**
+ * Refreshes the cached snapshot at most once per calendar day, so neither
+ * the notification scheduler nor get_academia_status ever have to hit the
  * network for an ordinary question. Call this once on app boot; it's a
- * cheap no-op if today's cache already exists or credentials aren't set up.
+ * cheap no-op if today's cache already exists or credentials aren't set up
+ * — silent on failure (best-effort, will retry on next boot) since nothing
+ * is waiting on it directly.
  */
 export async function ensureTodaysClassScheduleCache(store: DataStore, now: Date = new Date()): Promise<void> {
   const today = localDateKey(now);
@@ -184,34 +227,15 @@ export async function ensureTodaysClassScheduleCache(store: DataStore, now: Date
     }
   }
 
-  const email = await store.getPreference("academia_email");
-  const password = await store.getPreference("academia_password");
-  if (!email || !password) return; // academia portal not configured yet
-
-  const sessionRaw = await store.getPreference("academia_session");
-  let session: unknown;
-  try {
-    session = sessionRaw ? JSON.parse(sessionRaw) : undefined;
-  } catch {
-    session = undefined;
-  }
-
-  const data = await fetchAcademiaData(email, password, session);
-  if (!data) return; // best-effort — will retry on next boot
-
-  if (data.sessionData) {
-    store.setPreference("academia_session", JSON.stringify(data.sessionData)).catch(() => {});
-  }
-
-  const snapshot = await buildSnapshot(store, data, today);
-  await saveSnapshot(store, snapshot);
+  await fetchAndSaveSnapshot(store, now);
 }
 
 /** Reads today's cached snapshot, if any — no network call. Used by the
  * notification scheduler (which runs far more often than once a day) and by
  * get_academia_status as its default, fast path. Re-applies cancellation
  * overrides to `classes` live, so a cancellation made mid-day (after the
- * cache was already built) takes effect immediately without a fresh fetch. */
+ * cache was already built) takes effect immediately without a fresh fetch.
+ * Returns null if there's no cache, or the cache isn't from today. */
 export async function getTodaysClassScheduleCache(store: DataStore, now: Date = new Date()): Promise<CachedSchedule | null> {
   const raw = await store.getPreference(CACHE_KEY);
   if (!raw) return null;
@@ -221,6 +245,19 @@ export async function getTodaysClassScheduleCache(store: DataStore, now: Date = 
     if (cached.date !== today) return null;
     const overrides = await getCourseOverrides(store, today);
     return { ...cached, classes: cached.classes.filter((c) => !isCancelled(overrides, today, c.code)) };
+  } catch {
+    return null;
+  }
+}
+
+/** Reads whatever's cached regardless of date — including stale, prior-day
+ * data — so a UI can show "last synced X" instead of just "no data." Use
+ * getTodaysClassScheduleCache instead when you need today's data or nothing. */
+export async function getCachedSnapshotRaw(store: DataStore): Promise<CachedSchedule | null> {
+  const raw = await store.getPreference(CACHE_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as CachedSchedule;
   } catch {
     return null;
   }
