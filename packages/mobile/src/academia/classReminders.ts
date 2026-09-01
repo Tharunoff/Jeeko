@@ -1,19 +1,22 @@
 import type { CalendarEvent, DataStore } from "@personalos/core";
-import { fetchAcademiaData } from "./academiaClient";
+import { fetchAcademiaData, type AcademiaData } from "./academiaClient";
 import { resolveSlotTimes } from "./timeGrid";
 import { getCourseOverrides, isCancelled } from "./courseOverrides";
 
 /**
- * Deterministic (non-AI) class-reminder pipeline. This is explicitly NOT
- * routed through the agent loop — it's a plain data fetch + local
- * notification schedule, per the user's request ("no need to connect ai for
- * that"). It shares timeGrid.ts's slot resolution with the get_academia_status
- * tool, but runs independently on app boot.
- *
- * It also syncs today's classes into the core DataStore as real
- * CalendarEvent rows (type "class", fixed) so the existing capacity/
- * scheduling engines automatically subtract them from free time — no
- * changes needed in core for that, it's just feeding it real data.
+ * The single daily academia snapshot — one cache, refreshed at most once per
+ * calendar day (on app boot), that both the deterministic class-reminder
+ * notifications AND the get_academia_status tool read from. Two reasons for
+ * one shared cache instead of two separate fetches:
+ *  - get_academia_status used to hit the live scraper on every single
+ *    question, which is slow (Render free-tier cold starts) and, per the
+ *    user, means a portal outage makes Jeeko unable to answer at all even
+ *    though it already knew the answer minutes ago.
+ *  - It also drives the deterministic (non-AI) class-reminder notifications,
+ *    unaffected by any of the above — see notifications/scheduler.ts.
+ * Writing to CACHE_KEY always overwrites the previous day's entry (one key,
+ * not a growing log) — there is never old data sitting around once today's
+ * snapshot lands.
  */
 
 export interface CachedClassEntry {
@@ -31,10 +34,21 @@ export interface CachedCourseRef {
   title: string;
 }
 
+export interface CachedAttendanceCourse {
+  title: string;
+  slot: string;
+  attendancePercent: number;
+  hoursConducted: number;
+  hoursAbsent: number;
+}
+
 export interface CachedSchedule {
   date: string; // "YYYY-MM-DD", device-local
   dayOrder: number | null;
   isHoliday: boolean;
+  isAttendanceAvailable: boolean;
+  overallAttendancePercent: number | null;
+  attendanceByCourse: CachedAttendanceCourse[];
   classes: CachedClassEntry[];
   /** Every registered course (not just today's), for resolving free-text
    * course references when cancelling — a course not meeting today still
@@ -42,7 +56,7 @@ export interface CachedSchedule {
   allCourses: CachedCourseRef[];
 }
 
-const CACHE_KEY = "academia_today_schedule_cache";
+export const CACHE_KEY = "academia_today_schedule_cache";
 const SYNCED_EVENT_IDS_KEY = "academia_synced_calendar_event_ids";
 
 export function localDateKey(d: Date): string {
@@ -51,6 +65,61 @@ export function localDateKey(d: Date): string {
 
 export function calendarEventId(date: string, courseCode: string, from: string): string {
   return `academia-${date}-${courseCode}-${from.replace(":", "")}`;
+}
+
+/** Turns a raw AcademiaData fetch into the cached snapshot shape — shared by
+ * the boot-time refresh below and get_academia_status's own live-fallback,
+ * so the two paths can never compute this differently. */
+export async function buildSnapshot(store: DataStore, data: AcademiaData, today: string): Promise<CachedSchedule> {
+  const overrides = await getCourseOverrides(store, today);
+
+  const attendanceByTitle = new Map<string, number>();
+  const attendanceByCourse: CachedAttendanceCourse[] = [];
+  for (const c of Object.values(data.attendanceByCourse)) {
+    if (typeof c.attendance_percentage === "number") {
+      attendanceByTitle.set(c.course_title.trim().toLowerCase(), c.attendance_percentage);
+    }
+    attendanceByCourse.push({
+      title: c.course_title,
+      slot: c.slot,
+      attendancePercent: c.attendance_percentage,
+      hoursConducted: c.hours_conducted,
+      hoursAbsent: c.hours_absent
+    });
+  }
+
+  const classes: CachedClassEntry[] = [];
+  if (typeof data.dayOrder === "number") {
+    for (const c of data.courses) {
+      if (isCancelled(overrides, today, c.course_code)) continue;
+      const ranges = resolveSlotTimes(data.dayOrder, c.slot);
+      for (const r of ranges) {
+        classes.push({
+          code: c.course_code,
+          title: c.course_title,
+          room: c.room_no,
+          faculty: c.faculty_name,
+          from: r.from,
+          to: r.to,
+          attendancePercent: attendanceByTitle.get(c.course_title.trim().toLowerCase()) ?? null
+        });
+      }
+    }
+    classes.sort((a, b) => a.from.localeCompare(b.from));
+  }
+
+  const allCourses: CachedCourseRef[] = data.courses.map((c) => ({ code: c.course_code, title: c.course_title }));
+
+  return {
+    date: today,
+    dayOrder: data.dayOrder,
+    isHoliday: data.isHoliday,
+    isAttendanceAvailable: !data.isAttendanceMock,
+    overallAttendancePercent: data.isAttendanceMock ? null : data.overallAttendance,
+    attendanceByCourse: data.isAttendanceMock ? [] : attendanceByCourse,
+    classes,
+    allCourses
+  };
 }
 
 /** Deletes calendar events created by a previous sync (tracked by id, since
@@ -86,11 +155,20 @@ async function syncClassesToCalendar(store: DataStore, today: string, classes: C
   await store.setPreference(SYNCED_EVENT_IDS_KEY, JSON.stringify(newIds));
 }
 
+/** Persists a snapshot (overwriting whatever was cached before — never a
+ * growing log) and syncs its classes to the calendar. Exported so
+ * get_academia_status's live-fallback/force-refresh path can save what it
+ * fetched too, not just the boot-time refresh below. */
+export async function saveSnapshot(store: DataStore, snapshot: CachedSchedule): Promise<void> {
+  await store.setPreference(CACHE_KEY, JSON.stringify(snapshot));
+  await syncClassesToCalendar(store, snapshot.date, snapshot.classes);
+}
+
 /**
- * Fetches live academia data and computes today's class schedule (with each
- * course's current attendance %), caching it locally — at most once per
- * calendar day, so the notification scheduler (which re-runs after every app
- * mutation) never has to hit the network. Call this once on app boot; it's a
+ * Fetches live academia data and caches the full snapshot (schedule +
+ * attendance) locally — at most once per calendar day, so neither the
+ * notification scheduler nor get_academia_status ever have to hit the
+ * network for an ordinary question. Call this once on app boot; it's a
  * cheap no-op if today's cache already exists or credentials aren't set up.
  */
 export async function ensureTodaysClassScheduleCache(store: DataStore, now: Date = new Date()): Promise<void> {
@@ -125,47 +203,15 @@ export async function ensureTodaysClassScheduleCache(store: DataStore, now: Date
     store.setPreference("academia_session", JSON.stringify(data.sessionData)).catch(() => {});
   }
 
-  const overrides = await getCourseOverrides(store, today);
-
-  const attendanceByTitle = new Map<string, number>();
-  for (const c of Object.values(data.attendanceByCourse)) {
-    if (typeof c.attendance_percentage === "number") {
-      attendanceByTitle.set(c.course_title.trim().toLowerCase(), c.attendance_percentage);
-    }
-  }
-
-  const classes: CachedClassEntry[] = [];
-  if (typeof data.dayOrder === "number") {
-    for (const c of data.courses) {
-      if (isCancelled(overrides, today, c.course_code)) continue;
-      const ranges = resolveSlotTimes(data.dayOrder, c.slot);
-      for (const r of ranges) {
-        classes.push({
-          code: c.course_code,
-          title: c.course_title,
-          room: c.room_no,
-          faculty: c.faculty_name,
-          from: r.from,
-          to: r.to,
-          attendancePercent: attendanceByTitle.get(c.course_title.trim().toLowerCase()) ?? null
-        });
-      }
-    }
-    classes.sort((a, b) => a.from.localeCompare(b.from));
-  }
-
-  const allCourses: CachedCourseRef[] = data.courses.map((c) => ({ code: c.course_code, title: c.course_title }));
-
-  const cache: CachedSchedule = { date: today, dayOrder: data.dayOrder, isHoliday: data.isHoliday, classes, allCourses };
-  await store.setPreference(CACHE_KEY, JSON.stringify(cache));
-  await syncClassesToCalendar(store, today, classes);
+  const snapshot = await buildSnapshot(store, data, today);
+  await saveSnapshot(store, snapshot);
 }
 
-/** Reads today's cached class schedule, if any — no network call. Used by
- * the notification scheduler, which runs far more often than once a day.
- * Re-applies cancellation overrides live, so a cancellation made mid-day
- * (after the cache was already built) takes effect immediately without
- * needing a fresh network fetch. */
+/** Reads today's cached snapshot, if any — no network call. Used by the
+ * notification scheduler (which runs far more often than once a day) and by
+ * get_academia_status as its default, fast path. Re-applies cancellation
+ * overrides to `classes` live, so a cancellation made mid-day (after the
+ * cache was already built) takes effect immediately without a fresh fetch. */
 export async function getTodaysClassScheduleCache(store: DataStore, now: Date = new Date()): Promise<CachedSchedule | null> {
   const raw = await store.getPreference(CACHE_KEY);
   if (!raw) return null;

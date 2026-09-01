@@ -1,11 +1,43 @@
 import type { DataStore } from "@personalos/core";
 import type { ExternalTool } from "@personalos/core";
 import { fetchAcademiaData } from "./academiaClient";
-import { resolveSlotTimes } from "./timeGrid";
+import {
+  buildSnapshot,
+  saveSnapshot,
+  getTodaysClassScheduleCache,
+  localDateKey,
+  CACHE_KEY,
+  type CachedSchedule
+} from "./classReminders";
 
 function nowHHMM(): string {
   const d = new Date();
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+/** Shared shape for the tool's response, whether it came from cache or a
+ * fresh fetch — computes todaysSchedule/nextClass against the current clock
+ * time from whatever CachedSchedule it's given. */
+function respond(snapshot: CachedSchedule, source: "cache" | "live") {
+  const currentTime = nowHHMM();
+  const todaysSchedule = snapshot.classes;
+  const nextClass = todaysSchedule.find((s) => s.from > currentTime) ?? null;
+
+  return {
+    dayOrder: snapshot.dayOrder,
+    isHoliday: snapshot.isHoliday,
+    isAttendanceAvailable: snapshot.isAttendanceAvailable,
+    overallAttendancePercent: snapshot.overallAttendancePercent,
+    currentTime,
+    todaysSchedule,
+    nextClass,
+    courses: snapshot.allCourses,
+    attendanceByCourse: snapshot.attendanceByCourse,
+    dataSource: source,
+    dataAsOf: snapshot.date,
+    note:
+      "todaysSchedule and nextClass are computed from a fixed SRM period-time grid and ARE real clock times — safe to state directly (e.g. 'your next class is Computer Networks at 1:25pm'). If todaysSchedule is empty but courses exist, a slot code couldn't be resolved — say you're not sure of the exact time rather than guessing. If dayOrder is null and isHoliday is true, today looks like a holiday/off day (word it as a guess, not certain) — no schedule can be computed. If dayOrder is null and isHoliday is false, say you couldn't determine today's day order right now. If isAttendanceAvailable is false, the portal's attendance page failed to load this time — never say attendance is 0% or state any number; tell the user it couldn't be fetched and to try again shortly. dataSource 'cache' means this is from earlier today, not a fresh check this second — mention that only if the user specifically asked for fresh/live/updated data (they'd have set forceRefresh, so you'd already be seeing 'live' in that case)."
+  };
 }
 
 /**
@@ -13,18 +45,42 @@ function nowHHMM(): string {
  * core's ALL_TOOLS since it needs a network call core deliberately has no
  * access to (see agentLoop.ts's ExternalTool). Injected into runAgentLoop
  * from AppState.tsx's chat().
+ *
+ * Cache-first by design (see classReminders.ts's buildSnapshot/saveSnapshot):
+ * the live scraper is slow (Render free-tier cold starts) and, per the user,
+ * a portal outage shouldn't mean Jeeko can't answer at all when it already
+ * knew the answer from this morning's refresh. Only forceRefresh:true (the
+ * user explicitly asking for fresh/live/updated data) skips the cache.
  */
 export function createAcademiaTools(store: DataStore): ExternalTool[] {
   const getAcademiaStatus: ExternalTool = {
     name: "get_academia_status",
     description:
-      "Gets the user's live SRM Academia data: registered courses, today's day order, and per-course + overall attendance percentage. Also computes today's actual class schedule (clock times) and the next upcoming class using the fixed SRM period-time grid. Use when asked about classes, timetable, attendance, or 'when is my next class'.",
-    parameters: { type: "object", properties: {} },
-    handler: async () => {
+      "Gets the user's SRM Academia data: registered courses, today's day order, today's real class schedule with clock times, the next upcoming class, and per-course + overall attendance percentage. Use when asked about classes, timetable, attendance, or 'when is my next class'. By default this reads a local cache refreshed once this morning (fast, works even if the portal/scraper is briefly down) — pass forceRefresh:true ONLY when the user explicitly asks for fresh/live/updated/current data (e.g. 'check my latest attendance', 'refresh my schedule'), which does a real live fetch and updates the cache.",
+    parameters: {
+      type: "object",
+      properties: {
+        forceRefresh: {
+          type: "boolean",
+          description: "True only if the user explicitly asked for fresh/live/updated data rather than what's already known."
+        }
+      }
+    },
+    handler: async (args: { forceRefresh?: boolean }) => {
       const email = await store.getPreference("academia_email");
       const password = await store.getPreference("academia_password");
       if (!email || !password) {
         return { error: "Academia portal credentials aren't set up yet. Ask the user to add them in Settings → Academia Portal." };
+      }
+
+      const now = new Date();
+
+      if (!args.forceRefresh) {
+        const cached = await getTodaysClassScheduleCache(store, now);
+        if (cached) return respond(cached, "cache");
+        // No cache yet today (e.g. the morning boot-refresh hasn't run or
+        // failed) — fall through to a live fetch so the user still gets an
+        // answer instead of an error just because caching hasn't caught up.
       }
 
       const cachedRaw = await store.getPreference("academia_session");
@@ -37,9 +93,21 @@ export function createAcademiaTools(store: DataStore): ExternalTool[] {
 
       const data = await fetchAcademiaData(email, password, cachedSession);
       if (!data) {
+        // Live fetch failed — fall back to whatever's cached, even if it's
+        // from a previous day, rather than a bare error. Being honest with
+        // Jeeko about staleness is handled by dataAsOf in the note above.
+        const staleRaw = await store.getPreference(CACHE_KEY);
+        if (staleRaw) {
+          try {
+            const stale: CachedSchedule = JSON.parse(staleRaw);
+            return respond(stale, "cache");
+          } catch {
+            // fall through to the error below
+          }
+        }
         return {
           error:
-            "Couldn't reach the academia scraper or login failed. The server may be cold-starting (free tier, up to a minute after being idle) — worth trying again shortly. If it keeps failing, the portal credentials in Settings may be wrong."
+            "Couldn't reach the academia scraper or login failed, and there's no locally cached data to fall back on. The server may be cold-starting (free tier, up to a minute after being idle) — worth trying again shortly. If it keeps failing, the portal credentials in Settings may be wrong."
         };
       }
 
@@ -47,64 +115,9 @@ export function createAcademiaTools(store: DataStore): ExternalTool[] {
         store.setPreference("academia_session", JSON.stringify(data.sessionData)).catch(() => {});
       }
 
-      // Compute today's actual clock-time schedule from the fixed SRM
-      // period grid (packages/mobile/src/academia/timeGrid.ts) — only
-      // possible when we have a real numeric day order.
-      let todaysSchedule: Array<{
-        code: string;
-        title: string;
-        faculty: string;
-        room: string;
-        type: string;
-        from: string;
-        to: string;
-      }> = [];
-      if (typeof data.dayOrder === "number") {
-        for (const c of data.courses) {
-          const ranges = resolveSlotTimes(data.dayOrder, c.slot);
-          for (const r of ranges) {
-            todaysSchedule.push({
-              code: c.course_code,
-              title: c.course_title,
-              faculty: c.faculty_name,
-              room: c.room_no,
-              type: c.course_type,
-              from: r.from,
-              to: r.to
-            });
-          }
-        }
-        todaysSchedule.sort((a, b) => a.from.localeCompare(b.from));
-      }
-      const currentTime = nowHHMM();
-      const nextClass = todaysSchedule.find((s) => s.from > currentTime) ?? null;
-
-      return {
-        dayOrder: data.dayOrder,
-        isHoliday: data.isHoliday,
-        isAttendanceAvailable: !data.isAttendanceMock,
-        overallAttendancePercent: data.overallAttendance,
-        currentTime,
-        todaysSchedule,
-        nextClass,
-        courses: data.courses.map((c) => ({
-          code: c.course_code,
-          title: c.course_title,
-          slot: c.slot,
-          faculty: c.faculty_name,
-          room: c.room_no,
-          type: c.course_type
-        })),
-        attendanceByCourse: Object.values(data.attendanceByCourse).map((c) => ({
-          title: c.course_title,
-          slot: c.slot,
-          attendancePercent: c.attendance_percentage,
-          hoursConducted: c.hours_conducted,
-          hoursAbsent: c.hours_absent
-        })),
-        note:
-          "todaysSchedule and nextClass are computed from a fixed SRM period-time grid and ARE real clock times — safe to state directly (e.g. 'your next class is Computer Networks at 1:25pm'). If todaysSchedule is empty but courses exist, a slot code couldn't be resolved — say you're not sure of the exact time rather than guessing. If dayOrder is null and isHoliday is true, today looks like a holiday/off day (word it as a guess, not certain) — no schedule can be computed. If dayOrder is null and isHoliday is false, say you couldn't determine today's day order right now. If isAttendanceAvailable is false, the portal's real attendance page failed to load this time — overallAttendancePercent/attendanceByCourse are empty/null on purpose, NEVER say attendance is 0% or state any attendance number; tell the user attendance couldn't be fetched right now and to try again shortly."
-      };
+      const snapshot = await buildSnapshot(store, data, localDateKey(now));
+      await saveSnapshot(store, snapshot);
+      return respond(snapshot, "live");
     }
   };
 
