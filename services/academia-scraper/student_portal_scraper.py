@@ -164,29 +164,44 @@ class StudentPortalScraper:
             dtoken_match = re.search(r"window\.SECURE_CONFIG\.domainFieldName\s*=\s*'([^']+)';", html)
             cptoken_match = re.search(r"window\.SECURE_CONFIG\.captchaFieldName\s*=\s*'([^']+)';", html)
             delim_match = re.search(r"window\.SECURE_CONFIG\.randomDelimiter\s*=\s*'([^']+)';", html)
+            # DIAGNOSTIC FINDING: the login page's own inline JS embeds
+            # window.SECURE_CONFIG.captchaText — literally the expected
+            # answer — confirmed present in a real response body. Trying it
+            # directly first (skips the image fetch + OCR/Gemini call
+            # entirely, and removes any read-accuracy uncertainty); falls
+            # back to solving the CAPTCHA image the old way if this field
+            # isn't present on some future page variant, or if using it
+            # doesn't actually work (can't rule out this being a canary
+            # value rather than the real one without testing it live).
+            captcha_text_match = re.search(r"window\.SECURE_CONFIG\.captchaText\s*=\s*'([^']+)';", html)
 
             dtoken_name = dtoken_match.group(1) if dtoken_match else "domainProof"
             cptoken_name = cptoken_match.group(1) if cptoken_match else "captchaProof"
             random_delim = delim_match.group(1) if delim_match else "4fe0"
 
-            domain_proof = base64.b64encode(f"{nonce}:sp.srmist.edu.in".encode()).decode()
-            try:
-                c_resp = self.session.get(
-                    captcha_url,
-                    headers={
-                        "X-Domain-Proof": domain_proof,
-                        "Accept": "image/jpeg, image/png, image/svg+xml, image/*",
-                        "Referer": self.LOGIN_PAGE_URL,
-                        "X-Requested-With": "XMLHttpRequest"
-                    },
-                    timeout=10
-                )
-                captcha_bytes = c_resp.content
-            except Exception as e:
-                print(f"[ERROR] Failed to fetch captcha: {e}")
-                continue
+            if captcha_text_match:
+                solved_captcha = captcha_text_match.group(1)
+                print(f"[CAPTCHA] Using embedded captchaText from page JS: '{solved_captcha}'")
+            else:
+                domain_proof = base64.b64encode(f"{nonce}:sp.srmist.edu.in".encode()).decode()
+                try:
+                    c_resp = self.session.get(
+                        captcha_url,
+                        headers={
+                            "X-Domain-Proof": domain_proof,
+                            "Accept": "image/jpeg, image/png, image/svg+xml, image/*",
+                            "Referer": self.LOGIN_PAGE_URL,
+                            "X-Requested-With": "XMLHttpRequest"
+                        },
+                        timeout=10
+                    )
+                    captcha_bytes = c_resp.content
+                except Exception as e:
+                    print(f"[ERROR] Failed to fetch captcha: {e}")
+                    continue
 
-            solved_captcha = self._solve_captcha(captcha_bytes)
+                solved_captcha = self._solve_captcha(captcha_bytes)
+
             if not solved_captcha or len(solved_captcha) < 4:
                 print("[WARN] Invalid captcha resolution, retrying...")
                 continue
