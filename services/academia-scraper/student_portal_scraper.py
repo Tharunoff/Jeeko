@@ -238,18 +238,38 @@ class StudentPortalScraper:
                 print(f"[WARN] Got invalid-credentials response on attempt {attempt}, retrying with a fresh captcha...")
                 continue
 
+            if "logout" in post_text_lower:
+                print("[LOGIN] Successfully authenticated into SRM Student Portal!")
+                self._extract_dashboard_meta(post_resp.text)
+                return {"success": True}
+
+            # The login POST's own response might itself be the auto-submit
+            # loader — cheap no-op check if it's the plain login shell instead.
+            post_resp = self._follow_loader_chain(post_resp)
+            if "logout" in post_resp.text.lower():
+                print("[LOGIN] Successfully authenticated into SRM Student Portal!")
+                self._extract_dashboard_meta(post_resp.text)
+                return {"success": True}
+
             # Mirrors the portal's own client-side JS redirect after a
             # successful login POST — without this the session stays
             # half-authenticated and the dashboard fetch below silently
-            # looks like a fresh, logged-out login page.
+            # looks like a fresh, logged-out login page. Referer reflects
+            # wherever we're actually navigating from, like a real browser.
+            dash = post_resp
             try:
-                redirect_resp = self.session.post(self.LOGIN_PAGE_URL, timeout=15)
-                self._follow_loader_chain(redirect_resp)
+                redirect_resp = self.session.post(self.LOGIN_PAGE_URL, headers={"Referer": post_resp.url}, timeout=15)
+                redirect_resp = self._follow_loader_chain(redirect_resp)
+                if "logout" in redirect_resp.text.lower():
+                    print("[LOGIN] Successfully authenticated into SRM Student Portal!")
+                    self._extract_dashboard_meta(redirect_resp.text)
+                    return {"success": True}
+                dash = redirect_resp
             except Exception as e:
                 print(f"[WARN] Post-login redirect POST failed: {e}")
 
             try:
-                dash = self.session.get(self.DASHBOARD_URL, timeout=15)
+                dash = self.session.get(self.DASHBOARD_URL, headers={"Referer": dash.url}, timeout=15)
             except Exception as e:
                 print(f"[WARN] Dashboard fetch failed: {e}")
                 continue
@@ -342,19 +362,30 @@ class StudentPortalScraper:
     def _follow_loader_chain(self, resp: requests.Response, max_hops: int = 4) -> requests.Response:
         """Repeatedly follows the auto-submit loader page (see
         _resolve_loader_redirect) until it stops appearing or max_hops is
-        hit, logging each hop for diagnosis."""
+        hit, logging each hop for diagnosis.
+
+        Sets Referer to the page that contains the form for each hop —
+        a real browser's Referer reflects wherever it's actually navigating
+        FROM, not a fixed value. The rest of this scraper's requests use a
+        static Referer set once in __init__, unlike a real browser; this is
+        one concrete, checkable difference from real browser behavior worth
+        fixing given a WAF (the TS-prefixed cookie is an F5 BIG-IP ASM
+        signature) sits in front of this portal."""
         for hop in range(max_hops):
             loader_url = self._resolve_loader_redirect(resp)
             if not loader_url:
                 return resp
-            print(f"[DEBUG] Following auto-submit loader hop {hop + 1}: POST {loader_url}")
+            print(f"[DEBUG] Following auto-submit loader hop {hop + 1}: POST {loader_url} (Referer={resp.url})")
             try:
-                resp = self.session.post(loader_url, timeout=15)
+                resp = self.session.post(loader_url, headers={"Referer": resp.url}, timeout=15)
             except Exception as e:
                 print(f"[WARN] Loader-follow POST failed: {e}")
                 return resp
-            print(f"[DEBUG] loader-follow status={resp.status_code} url={resp.url}")
+            print(f"[DEBUG] loader-follow status={resp.status_code} url={resp.url} length={len(resp.text)}")
             print(f"[DEBUG] loader-follow content (first 800 chars): {resp.text[:800]}")
+            if "logout" in resp.text.lower():
+                print("[DEBUG] 'logout' found in loader-follow response — this hop is the real dashboard.")
+                return resp
         return resp
 
     def submit_manual_captcha(self, captcha_text: str) -> Dict[str, Any]:
@@ -380,13 +411,18 @@ class StudentPortalScraper:
         print(f"[MANUAL LOGIN] Submitting with human-read captcha: '{captcha_text.strip()}'")
 
         try:
-            post_resp = self.session.post(self.LOGIN_ACTION_URL, data=login_payload, timeout=15)
+            post_resp = self.session.post(
+                self.LOGIN_ACTION_URL,
+                data=login_payload,
+                headers={"Referer": self.LOGIN_PAGE_URL},
+                timeout=15
+            )
             post_resp.raise_for_status()
         except Exception as e:
             return {"success": False, "message": f"Login request failed: {e}"}
 
         post_text_lower = post_resp.text.lower()
-        print(f"[DEBUG] manual login POST status={post_resp.status_code} url={post_resp.url}")
+        print(f"[DEBUG] manual login POST status={post_resp.status_code} url={post_resp.url} length={len(post_resp.text)}")
         print(f"[DEBUG] manual login POST response (first 800 chars): {post_resp.text[:800]}")
 
         if "temporarily locked" in post_text_lower:
@@ -399,27 +435,41 @@ class StudentPortalScraper:
         if "invalid captcha" in post_text_lower:
             return {"success": False, "wrong_captcha": True, "message": "Incorrect captcha — please try again."}
 
+        if "logout" in post_text_lower:
+            self._extract_dashboard_meta(post_resp.text)
+            return {"success": True}
+
         # The login POST's own response might itself be the auto-submit
         # loader (in one observed attempt it wasn't — it was the plain
         # login-page shell — so this is a no-op then, but cheap to check).
         post_resp = self._follow_loader_chain(post_resp)
+        if "logout" in post_resp.text.lower():
+            self._extract_dashboard_meta(post_resp.text)
+            return {"success": True}
 
         # Mirrors the portal's own client-side JS redirect after a
-        # successful login POST.
+        # successful login POST. Referer reflects the page we're actually
+        # navigating from (post_resp.url), not a fixed value — see
+        # _follow_loader_chain's docstring for why that matters here.
+        dash = post_resp
         try:
-            redirect_resp = self.session.post(self.LOGIN_PAGE_URL, timeout=15)
-            print(f"[DEBUG] redirect POST status={redirect_resp.status_code}")
+            redirect_resp = self.session.post(self.LOGIN_PAGE_URL, headers={"Referer": post_resp.url}, timeout=15)
+            print(f"[DEBUG] redirect POST status={redirect_resp.status_code} length={len(redirect_resp.text)}")
             print(f"[DEBUG] redirect POST content (first 800 chars): {redirect_resp.text[:800]}")
             redirect_resp = self._follow_loader_chain(redirect_resp)
+            if "logout" in redirect_resp.text.lower():
+                self._extract_dashboard_meta(redirect_resp.text)
+                return {"success": True}
+            dash = redirect_resp
         except Exception as e:
             print(f"[WARN] Post-login redirect POST failed: {e}")
 
         try:
-            dash = self.session.get(self.DASHBOARD_URL, timeout=15)
+            dash = self.session.get(self.DASHBOARD_URL, headers={"Referer": dash.url}, timeout=15)
         except Exception as e:
             return {"success": False, "message": f"Dashboard fetch failed: {e}"}
 
-        print(f"[DEBUG] dashboard fetch status={dash.status_code} url={dash.url}")
+        print(f"[DEBUG] dashboard fetch status={dash.status_code} url={dash.url} length={len(dash.text)}")
         print(f"[DEBUG] dashboard content (first 800 chars): {dash.text[:800]}")
 
         # Confirmed via a live test: the portal hands back a "Please wait
