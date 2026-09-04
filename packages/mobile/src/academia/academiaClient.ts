@@ -178,3 +178,72 @@ export async function fetchStudentPortalData(netid: string, password: string): P
   }
 }
 
+export type StudentPortalCaptchaStartResult =
+  | { success: true; attemptId: string; captchaImageBase64: string; mimeType: string }
+  | { success: false; message: string };
+
+export type StudentPortalCaptchaSubmitResult =
+  | { success: true; data: StudentPortalData }
+  | { success: false; message: string; wrongCaptcha?: boolean; locked?: boolean; expired?: boolean };
+
+/**
+ * Starts a manual-captcha Student Portal login: fetches the real CAPTCHA
+ * image (no OCR involved) so the user can read and type it themselves in
+ * the app. These CAPTCHAs are heavily distorted — automated OCR (even
+ * Gemini vision) misread them consistently, which is what was behind the
+ * repeated "invalid credentials" failures, not actually-wrong credentials.
+ */
+export async function startStudentPortalManualLogin(netid: string, password: string): Promise<StudentPortalCaptchaStartResult> {
+  const cleanNetId = netid.split("@")[0].trim();
+  try {
+    const response = await fetchWithTimeout(`${SCRAPER_BASE}/student_portal/login/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ netid: cleanNetId, password })
+    });
+    const data = await response.json();
+    if (data.status === "success") {
+      return {
+        success: true,
+        attemptId: data.attempt_id,
+        captchaImageBase64: data.captcha_image_base64,
+        mimeType: data.mime_type
+      };
+    }
+    return { success: false, message: data.message || "Failed to start Student Portal login." };
+  } catch (err) {
+    console.warn("Student Portal login/start error:", err);
+    return { success: false, message: "Couldn't reach the scraper service. Check your connection and try again." };
+  }
+}
+
+/**
+ * Completes a login started via startStudentPortalManualLogin() using the
+ * captcha text the user typed in. One-shot: on any failure, start a fresh
+ * attempt rather than retrying the same attemptId (the server already
+ * discards it either way).
+ */
+export async function submitStudentPortalCaptcha(attemptId: string, captcha: string): Promise<StudentPortalCaptchaSubmitResult> {
+  try {
+    const response = await fetchWithTimeout(`${SCRAPER_BASE}/student_portal/login/submit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ attempt_id: attemptId, captcha })
+    });
+    const data = await response.json();
+    if (data.status === "success") {
+      return { success: true, data: data as StudentPortalData };
+    }
+    return {
+      success: false,
+      message: data.message || "Login failed.",
+      wrongCaptcha: data.wrong_captcha === true,
+      locked: data.locked === true,
+      expired: data.expired === true
+    };
+  } catch (err) {
+    console.warn("Student Portal login/submit error:", err);
+    return { success: false, message: "Couldn't reach the scraper service. Check your connection and try again." };
+  }
+}
+

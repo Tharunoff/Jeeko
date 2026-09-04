@@ -1,10 +1,30 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  Image,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View
+} from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useAppState } from "../state/AppState";
 import { Colors, CardShadow } from "../theme/colors";
 import { PressableScale } from "../components/PressableScale";
-import { fetchAndSaveSnapshot, getCachedSnapshotRaw, localDateKey, type CachedSchedule } from "../academia/classReminders";
+import {
+  fetchAndSaveSnapshot,
+  getCachedSnapshotRaw,
+  localDateKey,
+  startManualRefresh,
+  submitManualRefresh,
+  type CachedSchedule,
+  type ManualRefreshSession
+} from "../academia/classReminders";
 
 function attendanceColor(pct: number): string {
   if (pct < 75) return Colors.danger;
@@ -35,7 +55,13 @@ export function AttendanceScreen({ onOpenSettings }: { onOpenSettings: () => voi
   const [refreshing, setRefreshing] = useState(false);
   const [snapshot, setSnapshot] = useState<CachedSchedule | null>(null);
   const [hasCredentials, setHasCredentials] = useState(false);
+  const [hasStudentPortalCreds, setHasStudentPortalCreds] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [captchaSession, setCaptchaSession] = useState<ManualRefreshSession | null>(null);
+  const [captchaText, setCaptchaText] = useState("");
+  const [captchaSubmitting, setCaptchaSubmitting] = useState(false);
+  const [captchaModalError, setCaptchaModalError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!store) return;
@@ -47,6 +73,7 @@ export function AttendanceScreen({ onOpenSettings }: { onOpenSettings: () => voi
       getCachedSnapshotRaw(store)
     ]);
     setHasCredentials((!!email && !!password) || (!!spNetId && !!spPassword));
+    setHasStudentPortalCreds(!!spNetId && !!spPassword);
     setSnapshot(cached);
     setLoading(false);
   }, [store]);
@@ -58,6 +85,25 @@ export function AttendanceScreen({ onOpenSettings }: { onOpenSettings: () => voi
 
   async function refreshNow() {
     if (!store) return;
+
+    // Student Portal's CAPTCHAs are too distorted for automated OCR to read
+    // reliably — when those credentials are set, have the user read it
+    // themselves instead of silently failing over and over.
+    if (hasStudentPortalCreds) {
+      setRefreshing(true);
+      setError(null);
+      const result = await startManualRefresh(store);
+      setRefreshing(false);
+      if ("error" in result) {
+        setError(result.error);
+        return;
+      }
+      setCaptchaSession(result.session);
+      setCaptchaText("");
+      setCaptchaModalError(null);
+      return;
+    }
+
     setRefreshing(true);
     setError(null);
     const result = await fetchAndSaveSnapshot(store, new Date());
@@ -67,6 +113,47 @@ export function AttendanceScreen({ onOpenSettings }: { onOpenSettings: () => voi
       setSnapshot(result.snapshot);
     }
     setRefreshing(false);
+  }
+
+  async function submitCaptcha() {
+    if (!store || !captchaSession || !captchaText.trim()) return;
+    setCaptchaSubmitting(true);
+    setCaptchaModalError(null);
+
+    const result = await submitManualRefresh(store, captchaSession, captchaText.trim(), new Date());
+
+    if ("error" in result) {
+      if (result.locked) {
+        setCaptchaSubmitting(false);
+        setCaptchaSession(null);
+        setError(result.error);
+        return;
+      }
+
+      // Wrong/expired captcha — fetch a fresh image and let the user try
+      // again rather than retrying against an already-used session.
+      const retry = await startManualRefresh(store);
+      setCaptchaSubmitting(false);
+      if ("error" in retry) {
+        setCaptchaSession(null);
+        setError(retry.error);
+        return;
+      }
+      setCaptchaSession(retry.session);
+      setCaptchaText("");
+      setCaptchaModalError(result.error);
+      return;
+    }
+
+    setCaptchaSubmitting(false);
+    setCaptchaSession(null);
+    setSnapshot(result.snapshot);
+  }
+
+  function cancelCaptcha() {
+    setCaptchaSession(null);
+    setCaptchaText("");
+    setCaptchaModalError(null);
   }
 
   if (loading) {
@@ -81,6 +168,7 @@ export function AttendanceScreen({ onOpenSettings }: { onOpenSettings: () => voi
   const isFresh = snapshot?.date === today;
 
   return (
+    <>
     <ScrollView
       style={styles.screen}
       contentContainerStyle={{ padding: 20, paddingBottom: 50 }}
@@ -183,6 +271,62 @@ export function AttendanceScreen({ onOpenSettings }: { onOpenSettings: () => voi
         </>
       )}
     </ScrollView>
+
+    <Modal visible={!!captchaSession} transparent animationType="fade" onRequestClose={cancelCaptcha}>
+      <KeyboardAvoidingView
+        style={styles.modalBackdrop}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+      >
+        <View style={styles.modalCard}>
+          <Text style={styles.modalTitle}>Enter the captcha</Text>
+          <Text style={styles.modalSubtitle}>
+            SRM Student Portal's captchas are too distorted to read automatically — type what you see below.
+          </Text>
+
+          {captchaSession && (
+            <Image
+              source={{ uri: `data:${captchaSession.mimeType};base64,${captchaSession.captchaImageBase64}` }}
+              style={styles.captchaImage}
+              resizeMode="contain"
+            />
+          )}
+
+          <TextInput
+            style={styles.captchaInput}
+            value={captchaText}
+            onChangeText={setCaptchaText}
+            placeholder="Captcha text"
+            placeholderTextColor={Colors.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            autoFocus
+            editable={!captchaSubmitting}
+            onSubmitEditing={submitCaptcha}
+          />
+
+          {captchaModalError && <Text style={styles.modalError}>{captchaModalError}</Text>}
+
+          <View style={styles.modalButtonRow}>
+            <PressableScale style={styles.modalCancelButton} onPress={cancelCaptcha} disabled={captchaSubmitting} haptic="light">
+              <Text style={styles.modalCancelButtonText}>Cancel</Text>
+            </PressableScale>
+            <PressableScale
+              style={[styles.modalSubmitButton, (!captchaText.trim() || captchaSubmitting) && styles.modalSubmitButtonDisabled]}
+              onPress={submitCaptcha}
+              disabled={!captchaText.trim() || captchaSubmitting}
+              haptic="light"
+            >
+              {captchaSubmitting ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text style={styles.modalSubmitButtonText}>Submit</Text>
+              )}
+            </PressableScale>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+    </>
   );
 }
 
@@ -254,5 +398,59 @@ const styles = StyleSheet.create({
   courseRow: { flexDirection: "row", alignItems: "center", paddingVertical: 14, gap: 10 },
   courseTitle: { color: Colors.textPrimary, fontSize: 15, fontWeight: "600" },
   courseMeta: { color: Colors.textMuted, fontSize: 12, marginTop: 3 },
-  coursePct: { fontSize: 17, fontWeight: "700", fontVariant: ["tabular-nums"] }
+  coursePct: { fontSize: 17, fontWeight: "700", fontVariant: ["tabular-nums"] },
+
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24
+  },
+  modalCard: {
+    width: "100%",
+    maxWidth: 360,
+    backgroundColor: Colors.bgCard,
+    borderRadius: 18,
+    padding: 22,
+    ...CardShadow
+  },
+  modalTitle: { color: Colors.textPrimary, fontSize: 19, fontWeight: "700", marginBottom: 6 },
+  modalSubtitle: { color: Colors.textSecondary, fontSize: 13, lineHeight: 18, marginBottom: 16 },
+  captchaImage: {
+    width: "100%",
+    height: 70,
+    backgroundColor: "#fff",
+    borderRadius: 10,
+    marginBottom: 14
+  },
+  captchaInput: {
+    borderWidth: 1,
+    borderColor: Colors.separator,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: Colors.textPrimary,
+    marginBottom: 10
+  },
+  modalError: { color: Colors.danger, fontSize: 13, marginBottom: 10, lineHeight: 18 },
+  modalButtonRow: { flexDirection: "row", gap: 10, marginTop: 6 },
+  modalCancelButton: {
+    flex: 1,
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: "center",
+    backgroundColor: Colors.bgElevated
+  },
+  modalCancelButtonText: { color: Colors.textSecondary, fontWeight: "600", fontSize: 15 },
+  modalSubmitButton: {
+    flex: 1,
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: "center",
+    backgroundColor: Colors.accent
+  },
+  modalSubmitButtonDisabled: { opacity: 0.5 },
+  modalSubmitButtonText: { color: "#fff", fontWeight: "700", fontSize: 15 }
 });

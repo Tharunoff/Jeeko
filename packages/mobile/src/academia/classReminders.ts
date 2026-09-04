@@ -1,5 +1,12 @@
 import type { CalendarEvent, DataStore } from "@personalos/core";
-import { fetchAcademiaData, fetchStudentPortalData, type AcademiaData } from "./academiaClient";
+import {
+  fetchAcademiaData,
+  fetchStudentPortalData,
+  startStudentPortalManualLogin,
+  submitStudentPortalCaptcha,
+  type AcademiaData,
+  type StudentPortalData
+} from "./academiaClient";
 import { resolveSlotTimes } from "./timeGrid";
 import { getCourseOverrides, isCancelled } from "./courseOverrides";
 
@@ -212,49 +219,16 @@ export async function saveSnapshot(store: DataStore, snapshot: CachedSchedule): 
 
 export type RefreshResult = { snapshot: CachedSchedule } | { error: string };
 
-/**
- * Does a real live fetch and saves the result as today's snapshot — the one
- * place this actually happens. Used by the boot-time daily refresh below,
- * by get_academia_status's forceRefresh/no-cache-yet fallback, and by the
- * Attendance screen's manual "Refresh now" button, so all three can never
- * fetch or cache differently from each other.
- */
-export async function fetchAndSaveSnapshot(store: DataStore, now: Date = new Date()): Promise<RefreshResult> {
-  const email = await store.getPreference("academia_email");
-  const password = await store.getPreference("academia_password");
-  const spNetId = await store.getPreference("student_portal_netid");
-  const spPassword = await store.getPreference("student_portal_password");
-
-  if (!email && !spNetId) {
-    return { error: "Portal credentials aren't set up yet — add them in Settings." };
-  }
-
-  const sessionRaw = await store.getPreference("academia_session");
-  let session: unknown;
-  try {
-    session = sessionRaw ? JSON.parse(sessionRaw) : undefined;
-  } catch {
-    session = undefined;
-  }
-
-  // Fetch Academia (timetable & schedule) and Student Portal (live attendance & marks)
-  const [academiaData, studentPortalData] = await Promise.all([
-    email && password ? fetchAcademiaData(email, password, session) : Promise.resolve(null),
-    spNetId && spPassword ? fetchStudentPortalData(spNetId, spPassword) : Promise.resolve(null)
-  ]);
-
-  if (!academiaData && !studentPortalData) {
-    return {
-      error:
-        "Couldn't reach the scraper or login failed. Please check your credentials in Settings or try again shortly."
-    };
-  }
-
-  if (academiaData?.sessionData) {
-    store.setPreference("academia_session", JSON.stringify(academiaData.sessionData)).catch(() => {});
-  }
-
-  const today = localDateKey(now);
+/** Merges an Academia fetch (timetable/schedule) and a Student Portal fetch
+ * (live attendance/marks) into one snapshot — shared by the fully-automated
+ * refresh below and the Attendance screen's manual-captcha refresh, so the
+ * two paths can never build the cache differently from each other. */
+export async function buildSnapshotFromSources(
+  store: DataStore,
+  academiaData: AcademiaData | null,
+  studentPortalData: StudentPortalData | null,
+  today: string
+): Promise<CachedSchedule> {
   let snapshot: CachedSchedule;
 
   if (academiaData) {
@@ -297,6 +271,147 @@ export async function fetchAndSaveSnapshot(store: DataStore, now: Date = new Dat
       }
     }
   }
+
+  return snapshot;
+}
+
+/**
+ * Does a real live fetch and saves the result as today's snapshot. Used by
+ * the boot-time daily refresh below and by get_academia_status's
+ * forceRefresh/no-cache-yet fallback — both run with no one watching the
+ * screen, so Student Portal attendance here relies on automated (Gemini
+ * vision) CAPTCHA solving, which the heavily-distorted CAPTCHAs on this
+ * portal have proven unreliable for. The Attendance screen's manual
+ * "Refresh now" button uses startManualRefresh/submitManualRefresh below
+ * instead, which has the user read the CAPTCHA themselves.
+ */
+export async function fetchAndSaveSnapshot(store: DataStore, now: Date = new Date()): Promise<RefreshResult> {
+  const email = await store.getPreference("academia_email");
+  const password = await store.getPreference("academia_password");
+  const spNetId = await store.getPreference("student_portal_netid");
+  const spPassword = await store.getPreference("student_portal_password");
+
+  if (!email && !spNetId) {
+    return { error: "Portal credentials aren't set up yet — add them in Settings." };
+  }
+
+  const sessionRaw = await store.getPreference("academia_session");
+  let session: unknown;
+  try {
+    session = sessionRaw ? JSON.parse(sessionRaw) : undefined;
+  } catch {
+    session = undefined;
+  }
+
+  // Fetch Academia (timetable & schedule) and Student Portal (live attendance & marks)
+  const [academiaData, studentPortalData] = await Promise.all([
+    email && password ? fetchAcademiaData(email, password, session) : Promise.resolve(null),
+    spNetId && spPassword ? fetchStudentPortalData(spNetId, spPassword) : Promise.resolve(null)
+  ]);
+
+  if (!academiaData && !studentPortalData) {
+    return {
+      error:
+        "Couldn't reach the scraper or login failed. Please check your credentials in Settings or try again shortly."
+    };
+  }
+
+  if (academiaData?.sessionData) {
+    store.setPreference("academia_session", JSON.stringify(academiaData.sessionData)).catch(() => {});
+  }
+
+  const today = localDateKey(now);
+  const snapshot = await buildSnapshotFromSources(store, academiaData, studentPortalData, today);
+
+  await saveSnapshot(store, snapshot);
+  return { snapshot };
+}
+
+export interface ManualRefreshSession {
+  attemptId: string;
+  captchaImageBase64: string;
+  mimeType: string;
+  academiaDataPromise: Promise<AcademiaData | null>;
+}
+
+export type ManualRefreshStartResult = { session: ManualRefreshSession } | { error: string };
+
+/**
+ * Starts the Attendance screen's manual-captcha refresh: kicks off the
+ * Academia (timetable) fetch in the background while fetching the real,
+ * un-solved Student Portal CAPTCHA image for the user to read and type in
+ * themselves — these CAPTCHAs are distorted enough that automated OCR
+ * (including Gemini vision) has proven unreliable, so a human reading it is
+ * the actual missing step, not the request/payload construction.
+ */
+export async function startManualRefresh(store: DataStore): Promise<ManualRefreshStartResult> {
+  const email = await store.getPreference("academia_email");
+  const password = await store.getPreference("academia_password");
+  const spNetId = await store.getPreference("student_portal_netid");
+  const spPassword = await store.getPreference("student_portal_password");
+
+  if (!spNetId || !spPassword) {
+    return { error: "Add your SRM Student Portal NetID and password in Settings to refresh attendance." };
+  }
+
+  const sessionRaw = await store.getPreference("academia_session");
+  let academiaSession: unknown;
+  try {
+    academiaSession = sessionRaw ? JSON.parse(sessionRaw) : undefined;
+  } catch {
+    academiaSession = undefined;
+  }
+
+  const academiaDataPromise = email && password ? fetchAcademiaData(email, password, academiaSession) : Promise.resolve(null);
+
+  const captchaResult = await startStudentPortalManualLogin(spNetId, spPassword);
+  if (!captchaResult.success) {
+    return { error: captchaResult.message };
+  }
+
+  return {
+    session: {
+      attemptId: captchaResult.attemptId,
+      captchaImageBase64: captchaResult.captchaImageBase64,
+      mimeType: captchaResult.mimeType,
+      academiaDataPromise
+    }
+  };
+}
+
+export type ManualRefreshSubmitResult =
+  | { snapshot: CachedSchedule }
+  | { error: string; wrongCaptcha?: boolean; locked?: boolean; expired?: boolean };
+
+/** Completes a manual refresh started via startManualRefresh() using the
+ * captcha text the user typed in, merges it with the (by-now-likely-done)
+ * Academia fetch, and saves the result exactly like fetchAndSaveSnapshot
+ * does. On a wrong-captcha/expired result, the caller should call
+ * startManualRefresh() again for a fresh image rather than retrying with
+ * the same session. */
+export async function submitManualRefresh(
+  store: DataStore,
+  session: ManualRefreshSession,
+  captchaText: string,
+  now: Date = new Date()
+): Promise<ManualRefreshSubmitResult> {
+  const [submitResult, academiaData] = await Promise.all([submitStudentPortalCaptcha(session.attemptId, captchaText), session.academiaDataPromise]);
+
+  if (!submitResult.success) {
+    return {
+      error: submitResult.message,
+      wrongCaptcha: submitResult.wrongCaptcha,
+      locked: submitResult.locked,
+      expired: submitResult.expired
+    };
+  }
+
+  if (academiaData?.sessionData) {
+    store.setPreference("academia_session", JSON.stringify(academiaData.sessionData)).catch(() => {});
+  }
+
+  const today = localDateKey(now);
+  const snapshot = await buildSnapshotFromSources(store, academiaData, submitResult.data, today);
 
   await saveSnapshot(store, snapshot);
   return { snapshot };

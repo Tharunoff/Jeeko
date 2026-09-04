@@ -8,6 +8,8 @@ import re
 import time
 import json
 import base64
+import uuid
+import threading
 import requests
 from typing import Dict, Any, List, Optional
 from bs4 import BeautifulSoup
@@ -267,6 +269,111 @@ class StudentPortalScraper:
             "message": "Failed to log in to student portal. Please verify your credentials or try again later."
         }
 
+    def fetch_captcha_for_manual_entry(self) -> Dict[str, Any]:
+        """
+        Loads the login page and fetches the real CAPTCHA image without
+        trying to solve it — for a human (the user, in the app) to read
+        instead. These CAPTCHAs are heavily distorted with clutter lines;
+        Gemini vision misread them consistently across every automated
+        attempt, which is the far more likely explanation for the repeated
+        "invalid credentials" responses than an actual wrong password.
+        self.session keeps the cookies from these two requests so a later
+        submit_manual_captcha() call continues the exact same session.
+        """
+        try:
+            resp = self.session.get(self.LOGIN_PAGE_URL, timeout=15)
+            resp.raise_for_status()
+        except Exception as e:
+            return {"success": False, "message": f"Failed to load login page: {e}"}
+
+        token_match = re.search(r"SCaptchaServlet\?ts=.*?token=([a-z0-9\-]+)", resp.text, re.I)
+        if not token_match:
+            return {"success": False, "message": "Could not find captcha token on login page."}
+
+        captcha_token = token_match.group(1)
+        captcha_url = f"{self.BASE_URL}/SCaptchaServlet?ts={int(time.time() * 1000)}&token={captcha_token}"
+
+        try:
+            captcha_resp = self.session.get(captcha_url, timeout=15)
+        except Exception as e:
+            return {"success": False, "message": f"Failed to fetch captcha image: {e}"}
+
+        content_type = captcha_resp.headers.get("Content-Type", "")
+        if "image" not in content_type:
+            return {"success": False, "message": "Captcha endpoint did not return an image."}
+
+        captcha_bytes = captcha_resp.content
+        if not captcha_bytes or len(captcha_bytes) < 500:
+            return {"success": False, "message": "Captcha image looked empty."}
+
+        return {
+            "success": True,
+            "image_bytes": captcha_bytes,
+            "mime_type": content_type.split(";")[0].strip() or "image/png"
+        }
+
+    def submit_manual_captcha(self, captcha_text: str) -> Dict[str, Any]:
+        """
+        Completes login using a human-read CAPTCHA, against the session
+        already holding cookies from fetch_captcha_for_manual_entry().
+
+        Single attempt on purpose — this session is one-shot (the portal
+        issues a fresh CAPTCHA per page load), so on failure the caller
+        should fetch a brand new CAPTCHA rather than retrying blind here.
+        """
+        login_payload = {
+            "username": self.netid,
+            "password": self.password,
+            "captcha": captcha_text.strip(),
+            # Confirmed via a working reference implementation that the
+            # portal doesn't actually validate these.
+            "fpPayload": "",
+            "fpToken": "",
+            "recaptchaToken": ""
+        }
+
+        try:
+            post_resp = self.session.post(self.LOGIN_ACTION_URL, data=login_payload, timeout=15)
+            post_resp.raise_for_status()
+        except Exception as e:
+            return {"success": False, "message": f"Login request failed: {e}"}
+
+        post_text_lower = post_resp.text.lower()
+
+        if "temporarily locked" in post_text_lower:
+            return {
+                "success": False,
+                "locked": True,
+                "message": "Your user ID is temporarily locked due to multiple unsuccessful attempts. Please try again in 5 minutes."
+            }
+
+        if "invalid captcha" in post_text_lower:
+            return {"success": False, "wrong_captcha": True, "message": "Incorrect captcha — please try again."}
+
+        # Mirrors the portal's own client-side JS redirect after a
+        # successful login POST — without this the session stays
+        # half-authenticated and the dashboard fetch below silently looks
+        # like a fresh, logged-out login page.
+        try:
+            self.session.post(self.LOGIN_PAGE_URL, timeout=15)
+        except Exception as e:
+            print(f"[WARN] Post-login redirect POST failed: {e}")
+
+        try:
+            dash = self.session.get(self.DASHBOARD_URL, timeout=15)
+        except Exception as e:
+            return {"success": False, "message": f"Dashboard fetch failed: {e}"}
+
+        if "logout" in dash.text.lower():
+            self._extract_dashboard_meta(dash.text)
+            return {"success": True}
+
+        return {
+            "success": False,
+            "wrong_captcha": True,
+            "message": "Login didn't go through — double-check the captcha (or NetID/password in Settings) and try again."
+        }
+
     def _extract_dashboard_meta(self, dash_html: str):
         soup = BeautifulSoup(dash_html, "html.parser")
         subs = soup.find_all(class_="sidenav-footer-subtitle")
@@ -435,8 +542,6 @@ class StudentPortalScraper:
         return {"courses": courses}
 
     def scrape(self) -> Dict[str, Any]:
-        start_time = time.time()
-
         login_res = self.login()
         if not login_res.get("success"):
             return {
@@ -444,6 +549,12 @@ class StudentPortalScraper:
                 "message": login_res.get("message", "Login failed"),
                 "details": login_res
             }
+
+        return self.fetch_attendance_and_marks()
+
+    def fetch_attendance_and_marks(self) -> Dict[str, Any]:
+        """Fetches attendance + marks on an already-authenticated session (either login() or submit_manual_captcha() must have already succeeded)."""
+        start_time = time.time()
 
         self.session.headers.update({
             "X-Requested-With": "XMLHttpRequest",
@@ -501,6 +612,79 @@ class StudentPortalScraper:
 def scrape_student_attendance_and_marks(netid: str, password: str) -> Dict[str, Any]:
     scraper = StudentPortalScraper(netid, password)
     return scraper.scrape()
+
+
+# --- Manual-captcha login flow -----------------------------------------
+#
+# Holds live scraper instances (with their authenticated-in-progress
+# requests.Session) in memory between a /login/start call (fetch the real
+# captcha image, send it to the app) and a matching /login/submit call
+# (the user typed what they saw). Single-process in-memory dict is fine at
+# this scale (Render free tier runs one uvicorn worker); would need a
+# shared store (e.g. Redis) if this ever ran across multiple processes.
+_pending_logins: Dict[str, Dict[str, Any]] = {}
+_pending_logins_lock = threading.Lock()
+_PENDING_LOGIN_TTL_SECONDS = 5 * 60
+
+
+def _prune_pending_logins():
+    now = time.time()
+    with _pending_logins_lock:
+        expired = [k for k, v in _pending_logins.items() if now - v["created_at"] > _PENDING_LOGIN_TTL_SECONDS]
+        for k in expired:
+            del _pending_logins[k]
+
+
+def start_manual_student_portal_login(netid: str, password: str) -> Dict[str, Any]:
+    _prune_pending_logins()
+
+    scraper = StudentPortalScraper(netid, password)
+    captcha_res = scraper.fetch_captcha_for_manual_entry()
+    if not captcha_res.get("success"):
+        return {"status": "error", "message": captcha_res.get("message", "Failed to fetch captcha")}
+
+    attempt_id = uuid.uuid4().hex
+    with _pending_logins_lock:
+        _pending_logins[attempt_id] = {"scraper": scraper, "created_at": time.time()}
+
+    return {
+        "status": "success",
+        "attempt_id": attempt_id,
+        "captcha_image_base64": base64.b64encode(captcha_res["image_bytes"]).decode("ascii"),
+        "mime_type": captcha_res["mime_type"]
+    }
+
+
+def submit_manual_student_portal_captcha(attempt_id: str, captcha_text: str) -> Dict[str, Any]:
+    _prune_pending_logins()
+
+    with _pending_logins_lock:
+        entry = _pending_logins.get(attempt_id)
+
+    if not entry:
+        return {
+            "status": "error",
+            "expired": True,
+            "message": "This captcha attempt expired or was already used. Please request a new one."
+        }
+
+    scraper: StudentPortalScraper = entry["scraper"]
+    login_res = scraper.submit_manual_captcha(captcha_text)
+
+    # One-shot either way: a used or failed session isn't reusable, so
+    # always drop it and let the caller start fresh on failure.
+    with _pending_logins_lock:
+        _pending_logins.pop(attempt_id, None)
+
+    if not login_res.get("success"):
+        return {
+            "status": "error",
+            "message": login_res.get("message", "Login failed"),
+            "wrong_captcha": login_res.get("wrong_captcha", False),
+            "locked": login_res.get("locked", False)
+        }
+
+    return scraper.fetch_attendance_and_marks()
 
 
 if __name__ == "__main__":

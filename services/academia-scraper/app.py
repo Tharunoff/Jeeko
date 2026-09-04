@@ -5,7 +5,11 @@ from studentinfo_scrap import AcademiaClient
 from tools.fallback_mock_attendance_data import generate_mock_attendance_from_timetable
 from tools.studentportal_result import scrape_student_portal
 from tools.retry_fetch_failed_login import fetch_all_data_with_retry  # ADD THIS
-from student_portal_scraper import scrape_student_attendance_and_marks
+from student_portal_scraper import (
+    scrape_student_attendance_and_marks,
+    start_manual_student_portal_login,
+    submit_manual_student_portal_captcha,
+)
 from typing import Optional
 import time  # ADD THIS
 
@@ -36,6 +40,11 @@ class LoginRequest(BaseModel):
 class StudentPortalRequest(BaseModel):
     netid: str
     password: str
+
+
+class StudentPortalCaptchaSubmit(BaseModel):
+    attempt_id: str
+    captcha: str
 
 
 @app.post("/scrape")
@@ -226,6 +235,30 @@ async def scrape_student_attendance_and_marks_endpoint(request: StudentPortalReq
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/student_portal/login/start")
+async def student_portal_login_start(request: StudentPortalRequest):
+    """
+    Starts a manual-captcha Student Portal login: fetches the real CAPTCHA
+    image (no OCR) and holds the live, cookie-bearing session in memory
+    (keyed by attempt_id, 5 min TTL) for a matching /login/submit call once
+    the user has read and typed the captcha themselves.
+    Always returns 200 with a `status` field — this is an expected,
+    recoverable outcome path, not a server error.
+    """
+    return start_manual_student_portal_login(request.netid, request.password)
+
+
+@app.post("/student_portal/login/submit")
+async def student_portal_login_submit(request: StudentPortalCaptchaSubmit):
+    """
+    Completes a Student Portal login started via /login/start using the
+    human-read captcha text, then returns attendance + marks on success.
+    Always returns 200 with a `status` field so the client can tell a
+    wrong-captcha retry apart from an expired attempt or a real failure.
+    """
+    return submit_manual_student_portal_captcha(request.attempt_id, request.captcha)
 
 
 @app.post("/logout")
