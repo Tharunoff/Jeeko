@@ -149,6 +149,8 @@ class StudentPortalScraper:
         half-authenticated, which is exactly the silent "Dashboard
         verification failed" failure mode seen before.
         """
+        last_invalid_credentials_msg = None
+
         for attempt in range(1, self.max_captcha_retries + 1):
             print(f"[LOGIN] Attempt {attempt}/{self.max_captcha_retries} for NetID: {self.netid}")
 
@@ -211,6 +213,7 @@ class StudentPortalScraper:
                 continue
 
             post_text_lower = post_resp.text.lower()
+            print(f"[DEBUG] login POST response (first 500 chars): {post_resp.text[:500]}")
 
             if "temporarily locked" in post_text_lower:
                 msg = "Your user ID is temporarily locked due to multiple unsuccessful attempts. Please try again in 5 minutes."
@@ -222,9 +225,15 @@ class StudentPortalScraper:
                 continue
 
             if "invalid login credentials" in post_text_lower or "invalid credentials" in post_text_lower:
-                msg = "Invalid NetID or Password on SRM Student Portal."
-                print(f"[ERROR] {msg}")
-                return {"success": False, "message": msg, "invalid_credentials": True}
+                # Not treated as an immediate hard stop: the portal's error
+                # copy isn't confirmed to distinguish "wrong password" from
+                # "wrong/misread CAPTCHA" — a misread CAPTCHA is common and
+                # looks identical from here. Retry with a fresh CAPTCHA and
+                # only report this as the final answer if every attempt
+                # comes back the same way.
+                last_invalid_credentials_msg = "Invalid NetID or Password on SRM Student Portal."
+                print(f"[WARN] Got invalid-credentials response on attempt {attempt}, retrying with a fresh captcha...")
+                continue
 
             # Mirrors the portal's own client-side JS redirect after a
             # successful login POST — without this the session stays
@@ -249,6 +258,9 @@ class StudentPortalScraper:
             print(f"[WARN] Dashboard verification failed on attempt {attempt}.")
             print(f"[DEBUG] dashboard content (first 500 chars): {dash.text[:500]}")
             time.sleep(1)
+
+        if last_invalid_credentials_msg:
+            return {"success": False, "message": last_invalid_credentials_msg, "invalid_credentials": True}
 
         return {
             "success": False,
