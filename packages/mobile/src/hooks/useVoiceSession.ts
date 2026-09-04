@@ -5,7 +5,7 @@ import { File } from "expo-file-system";
 import type { Message } from "@personalos/core";
 import { useAppState } from "../state/AppState";
 import { VOICE_RECORDING_OPTIONS, voiceMimeTypeForPlatform } from "../voice/recordingOptions";
-import { speak, stopSpeaking } from "../voice/speech";
+import { speak, stopSpeaking, speakThinkingFiller } from "../voice/speech";
 
 export type VoiceState = "idle" | "listening" | "thinking" | "speaking";
 
@@ -127,6 +127,7 @@ export function useVoiceSession() {
     }
 
     setState("thinking");
+    speakThinkingFiller();
     try {
       const file = new File(recorder.uri);
       const base64 = await file.base64();

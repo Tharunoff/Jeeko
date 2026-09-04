@@ -41,6 +41,9 @@ export function SettingsScreen({ onClose }: { onClose: () => void }) {
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [academiaEmail, setAcademiaEmail] = useState("");
   const [academiaPassword, setAcademiaPassword] = useState("");
+  const [studentPortalNetId, setStudentPortalNetId] = useState("");
+  const [studentPortalPassword, setStudentPortalPassword] = useState("");
+  const [voiceEngine, setVoiceEngineState] = useState<"cloud" | "device">("cloud");
 
   useEffect(() => {
     if (!store || !user) return;
@@ -52,10 +55,16 @@ export function SettingsScreen({ onClose }: { onClose: () => void }) {
       if (key) setApiKey(key);
       const offline = await store.getPreference("offline_only");
       setOfflineOnly(offline === "true");
+      const savedEngine = await store.getPreference("voice_engine");
+      if (savedEngine === "device" || savedEngine === "cloud") setVoiceEngineState(savedEngine);
       const academiaE = await store.getPreference("academia_email");
       if (academiaE) setAcademiaEmail(academiaE);
       const academiaP = await store.getPreference("academia_password");
       if (academiaP) setAcademiaPassword(academiaP);
+      const spNetId = await store.getPreference("student_portal_netid");
+      if (spNetId) setStudentPortalNetId(spNetId);
+      const spPass = await store.getPreference("student_portal_password");
+      if (spPass) setStudentPortalPassword(spPass);
     })();
     loadReminders();
   }, [store, user]);
@@ -120,8 +129,11 @@ export function SettingsScreen({ onClose }: { onClose: () => void }) {
     try {
       await store.setPreference("gemini_api_key", apiKey.trim());
       await store.setPreference("offline_only", offlineOnly ? "true" : "false");
+      await store.setPreference("voice_engine", voiceEngine);
       await store.setPreference("academia_email", academiaEmail.trim());
       await store.setPreference("academia_password", academiaPassword);
+      await store.setPreference("student_portal_netid", studentPortalNetId.trim());
+      await store.setPreference("student_portal_password", studentPortalPassword);
       await store.saveUser({
         ...user,
         name: name.trim() || user.name,
@@ -256,6 +268,21 @@ export function SettingsScreen({ onClose }: { onClose: () => void }) {
               thumbColor={offlineOnly ? Colors.accent : "#f4f4f4"}
             />
           </View>
+          <View style={styles.separator} />
+          <View style={styles.switchRow}>
+            <View style={{ flex: 1, paddingRight: 10 }}>
+              <Text style={styles.fieldLabel}>Voice Engine</Text>
+              <Text style={{ fontSize: 11, color: Colors.textMuted, marginTop: 2 }}>
+                {voiceEngine === "cloud" ? "Natural AI Studio Voice (Gemini)" : "Fast Enhanced Device Voice (<50ms)"}
+              </Text>
+            </View>
+            <Switch
+              value={voiceEngine === "cloud"}
+              onValueChange={(val) => setVoiceEngineState(val ? "cloud" : "device")}
+              trackColor={{ false: Colors.bgElevated, true: Colors.accentSoft }}
+              thumbColor={voiceEngine === "cloud" ? Colors.accent : "#f4f4f4"}
+            />
+          </View>
         </View>
         <Text style={styles.sectionFooter}>
           Get a free key at ai.google.dev. The key is stored locally on your device only. When
@@ -293,6 +320,36 @@ export function SettingsScreen({ onClose }: { onClose: () => void }) {
           Stored locally on your device only, sent directly to your own deployed scraper
           (jeeko.onrender.com) when Jeeko needs your timetable or attendance — never to Google or
           anywhere else.
+        </Text>
+
+        {/* SRM Student Portal (sp.srmist.edu.in) — attendance and marks */}
+        <Text style={styles.sectionLabel}>SRM STUDENT PORTAL</Text>
+        <View style={styles.card}>
+          <View style={styles.fieldRow}>
+            <Text style={styles.fieldLabel}>NetID</Text>
+          </View>
+          <TextInput
+            style={styles.input}
+            value={studentPortalNetId}
+            onChangeText={setStudentPortalNetId}
+            placeholder="NetID (e.g. tr1201)"
+            placeholderTextColor={Colors.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <TextInput
+            style={[styles.input, { marginBottom: 4 }]}
+            value={studentPortalPassword}
+            onChangeText={setStudentPortalPassword}
+            placeholder="Portal / Email password"
+            placeholderTextColor={Colors.textMuted}
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        </View>
+        <Text style={styles.sectionFooter}>
+          Used to fetch live attendance and marks from sp.srmist.edu.in. NetID is your email prefix without '@srmist.edu.in'. Stored locally on your device only.
         </Text>
 
         {/* Save */}

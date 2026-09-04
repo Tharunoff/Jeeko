@@ -4,7 +4,7 @@
  * portal using credentials they entered in Settings — sent directly to this
  * one deployed endpoint, never anywhere else.
  */
-const SCRAPER_BASE = "https://jeeko.onrender.com";
+const SCRAPER_BASE = process.env.EXPO_PUBLIC_SCRAPER_URL || "https://jeeko.onrender.com";
 // Render's free tier sleeps after ~15 min idle; the first request after that
 // can take 30-60s to cold-start. Long timeout so that reads as "slow" rather
 // than "failed."
@@ -107,3 +107,74 @@ export async function fetchAcademiaData(email: string, password: string, cachedS
     return null;
   }
 }
+
+export interface StudentPortalAttendanceCourse {
+  course_code: string;
+  course_title: string;
+  category: string;
+  faculty_name: string;
+  slot: string;
+  hours_conducted: number;
+  hours_absent: number;
+  attendance_percentage: number;
+}
+
+export interface StudentPortalMarkComponent {
+  test_name: string;
+  marks_obtained: number | null;
+  max_marks: number | null;
+  raw_text: string;
+}
+
+export interface StudentPortalMarkCourse {
+  course_code: string;
+  course_title: string;
+  components: StudentPortalMarkComponent[];
+}
+
+export interface StudentPortalData {
+  status: string;
+  student_info: {
+    reg_no: string;
+    name: string;
+  };
+  attendance: {
+    courses: StudentPortalAttendanceCourse[];
+    overall_attendance: number;
+    total_hours_conducted: number;
+    total_hours_absent: number;
+  };
+  marks: {
+    courses: StudentPortalMarkCourse[];
+  };
+  fetch_time_seconds?: number;
+}
+
+/**
+ * Scrapes live attendance and internal marks directly from sp.srmist.edu.in.
+ */
+export async function fetchStudentPortalData(netid: string, password: string): Promise<StudentPortalData | null> {
+  if (!netid || !password) return null;
+
+  try {
+    const cleanNetId = netid.split("@")[0].trim();
+    const response = await fetchWithTimeout(`${SCRAPER_BASE}/student_portal/attendance_and_marks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ netid: cleanNetId, password })
+    });
+
+    if (!response.ok) {
+      console.warn("Student Portal scrape HTTP failed:", response.status);
+      return null;
+    }
+
+    const data = await response.json();
+    if (data.status !== "success") return null;
+    return data;
+  } catch (err) {
+    console.warn("Student Portal scrape error:", err);
+    return null;
+  }
+}
+

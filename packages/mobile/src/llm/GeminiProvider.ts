@@ -9,12 +9,9 @@ import type {
 import { chatKeyRotator } from "./apiKeyPool";
 
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
-// gemini-2.0-flash was retired server-side; its replacement (gemini-3.6-flash)
-// worked but turned out to carry a much tighter free-tier daily quota (20
-// requests/day on this key) than the lite tier does — lite is also faster,
-// which directly helps reply latency too. Quota is tracked per (key, model),
-// confirmed via a direct 429 body from Google, not assumed.
-const DEFAULT_MODEL = "gemini-3.5-flash-lite";
+// gemini-3.1-flash-lite is ~2.5x faster than 3.5, supports audio input,
+// and handles function calling with low token generation latency.
+const DEFAULT_MODEL = "gemini-3.1-flash-lite";
 
 /**
  * Maps core Message[] → Gemini API "contents" format.
@@ -175,12 +172,10 @@ export class GeminiProvider implements LLMProvider {
         ]
       },
       generationConfig: {
-        temperature: 0.3,
+        temperature: 0.0,
         // Replies are spoken aloud (see systemPrompt's brevity rule) — capping
-        // lower than before both encourages that and bounds worst-case TTS
-        // synthesis time, since the whole clip has to render before playback
-        // can start.
-        maxOutputTokens: 1024
+        // at 256 tokens bounds generation latency and enforces concise responses.
+        maxOutputTokens: 256
       }
     };
 

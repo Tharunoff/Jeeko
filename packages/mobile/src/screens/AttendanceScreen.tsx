@@ -39,12 +39,14 @@ export function AttendanceScreen({ onOpenSettings }: { onOpenSettings: () => voi
 
   const load = useCallback(async () => {
     if (!store) return;
-    const [email, password, cached] = await Promise.all([
+    const [email, password, spNetId, spPassword, cached] = await Promise.all([
       store.getPreference("academia_email"),
       store.getPreference("academia_password"),
+      store.getPreference("student_portal_netid"),
+      store.getPreference("student_portal_password"),
       getCachedSnapshotRaw(store)
     ]);
-    setHasCredentials(!!email && !!password);
+    setHasCredentials((!!email && !!password) || (!!spNetId && !!spPassword));
     setSnapshot(cached);
     setLoading(false);
   }, [store]);
@@ -90,7 +92,7 @@ export function AttendanceScreen({ onOpenSettings }: { onOpenSettings: () => voi
         <View style={styles.setupCard}>
           <Feather name="user-x" size={22} color={Colors.textMuted} />
           <Text style={styles.setupText}>
-            Add your SRM Academia portal email and password in Settings so Jeeko can fetch your attendance.
+            Add your SRM Student Portal (or Academia) credentials in Settings so Jeeko can fetch your attendance.
           </Text>
           <PressableScale style={styles.setupButton} onPress={onOpenSettings} haptic="light">
             <Text style={styles.setupButtonText}>Open Settings</Text>

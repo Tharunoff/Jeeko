@@ -16,8 +16,54 @@ function stopAmplitudeTracking() {
   resetLiveSpeechAmplitude();
 }
 
+let cachedBestVoice: string | undefined = undefined;
+let voiceCheckDone = false;
+let voiceMode: "cloud" | "device" = "cloud";
+let onDeviceAmpInterval: ReturnType<typeof setInterval> | null = null;
+
+export async function getBestNaturalVoice(): Promise<string | undefined> {
+  if (voiceCheckDone) return cachedBestVoice;
+  try {
+    const voices = await Speech.getAvailableVoicesAsync();
+    const englishVoices = voices.filter((v) => v.language.toLowerCase().startsWith("en"));
+    const naturalVoice =
+      englishVoices.find((v) => /natural|enhanced|network|neural/i.test(v.name) || /natural|enhanced|network|neural/i.test(v.identifier)) ??
+      englishVoices.find((v) => (v as any).quality === "Enhanced") ??
+      englishVoices.find((v) => /google.*en-us/i.test(v.identifier) || /siri/i.test(v.name)) ??
+      englishVoices[0];
+
+    if (naturalVoice) {
+      cachedBestVoice = naturalVoice.identifier;
+    }
+  } catch (err) {
+    console.warn("Could not query available voices:", err);
+  }
+  voiceCheckDone = true;
+  return cachedBestVoice;
+}
+
+// Eagerly discover best voice on startup
+void getBestNaturalVoice();
+
+export function setVoiceEngine(mode: "cloud" | "device"): void {
+  voiceMode = mode;
+}
+
+export function getVoiceEngine(): "cloud" | "device" {
+  return voiceMode;
+}
+
+function stopOnDeviceTracking() {
+  if (onDeviceAmpInterval) {
+    clearInterval(onDeviceAmpInterval);
+    onDeviceAmpInterval = null;
+  }
+  resetLiveSpeechAmplitude();
+}
+
 function stopGeminiPlayback() {
   stopAmplitudeTracking();
+  stopOnDeviceTracking();
   if (!currentPlayer) return;
   try {
     currentPlayer.pause();
@@ -29,32 +75,50 @@ function stopGeminiPlayback() {
 }
 
 function speakOnDevice(text: string, callbacks?: { onDone?: () => void; onStart?: () => void }) {
+  stopOnDeviceTracking();
+  let step = 0;
   Speech.speak(text, {
-    rate: 1.0,
+    voice: cachedBestVoice,
+    rate: 1.05,
     pitch: 1.0,
-    onStart: callbacks?.onStart,
-    onDone: callbacks?.onDone,
-    onStopped: callbacks?.onDone
+    onStart: () => {
+      callbacks?.onStart?.();
+      onDeviceAmpInterval = setInterval(() => {
+        step = (step + 1) % 12;
+        const wave = 0.25 + 0.35 * Math.sin((step / 12) * Math.PI * 2);
+        setLiveSpeechAmplitude(wave, 100);
+      }, 100);
+    },
+    onDone: () => {
+      stopOnDeviceTracking();
+      callbacks?.onDone?.();
+    },
+    onStopped: () => {
+      stopOnDeviceTracking();
+      callbacks?.onDone?.();
+    },
+    onError: () => {
+      stopOnDeviceTracking();
+      callbacks?.onDone?.();
+    }
   });
 }
 
 /**
- * Speaks text aloud. Three-tier fallback: Gemini's Live API first (streams
- * back progressively — see geminiLiveTts.ts — so playback can start sooner
- * than waiting for a full clip), then the one-shot REST TTS if Live fails or
- * has no quota left, then the on-device engine (instant, fully offline) if
- * neither Gemini path works. Jeeko is never silent as long as any tier works.
- * `onDone` fires when playback finishes (or is stopped), which is what lets the
- * voice loop automatically start listening again.
- *
- * While a Gemini clip plays, this also drives `liveSpeechAmplitude` from the
- * clip's real loudness envelope (see pcmAudio.ts) — polling `player.currentTime`
- * against the precomputed envelope is what lets VoiceOrb's aura actually swell
- * and settle with the words being spoken, not just loop on a fixed timer.
+ * Speaks text aloud. If voiceMode is 'device', speaks instantly (<50ms) using
+ * the highest-quality natural on-device voice. If 'cloud', uses Gemini's
+ * neural studio voice (streaming Live first, REST fallback) and falls back
+ * to device if unavailable.
  */
 export function speak(text: string, callbacks?: { onDone?: () => void; onStart?: () => void }): void {
   Speech.stop();
   stopGeminiPlayback();
+  stopOnDeviceTracking();
+
+  if (voiceMode === "device") {
+    speakOnDevice(text, callbacks);
+    return;
+  }
 
   void (async () => {
     let clip: SpeechClip | null = await synthesizeSpeechLive(text);

@@ -5,6 +5,7 @@ from studentinfo_scrap import AcademiaClient
 from tools.fallback_mock_attendance_data import generate_mock_attendance_from_timetable
 from tools.studentportal_result import scrape_student_portal
 from tools.retry_fetch_failed_login import fetch_all_data_with_retry  # ADD THIS
+from student_portal_scraper import scrape_student_attendance_and_marks
 from typing import Optional
 import time  # ADD THIS
 
@@ -203,6 +204,26 @@ async def scrape_student_portal_endpoint(request: StudentPortalRequest):
     except HTTPException:
         raise
     
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/student_portal/attendance_and_marks")
+async def scrape_student_attendance_and_marks_endpoint(request: StudentPortalRequest):
+    """Scrape strictly attendance and internal marks from SRM student portal"""
+    try:
+        result = scrape_student_attendance_and_marks(request.netid, request.password)
+        if result.get("status") == "error":
+            error_msg = result.get("message", "Unknown error")
+            if "invalid" in error_msg.lower():
+                raise HTTPException(status_code=401, detail=error_msg)
+            elif "locked" in error_msg.lower():
+                raise HTTPException(status_code=429, detail=error_msg)
+            else:
+                raise HTTPException(status_code=500, detail=error_msg)
+        return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -71,7 +71,20 @@ async function completeTask(m: RegExpMatchArray, store: DataStore): Promise<stri
   return `Marked "${task.title}" as completed.`;
 }
 
+async function todayScheduleSummary(_m: RegExpMatchArray, store: DataStore): Promise<string> {
+  const schedule = (await executeTool("get_today_schedule", {}, { store, now: now() })) as any;
+  const blocks = schedule.blocks ?? [];
+  if (blocks.length === 0) return "You have no tasks scheduled for today — you have open time.";
+  const tasks = await store.listTasks();
+  const lines = blocks.map((b: any) => {
+    const t = tasks.find((task) => task.id === b.taskId);
+    return `${new Date(b.startTime).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}: ${t?.title ?? b.taskId} (${formatMinutes(b.durationMinutes)})`;
+  });
+  return `Today's schedule:\n${lines.join("\n")}`;
+}
+
 const OFFLINE_PATTERNS: Array<{ pattern: RegExp; handler: Handler }> = [
+  { pattern: /today'?s? schedule|schedule (?:for )?today|what(?:'s| is) my schedule/i, handler: todayScheduleSummary },
   { pattern: /how much free time|free time (do i have|today)/i, handler: freeTimeSummary },
   { pattern: /what should i do now|what'?s next|what should i focus on/i, handler: nextActionSummary },
   { pattern: /i (?:spent|worked) (\d+(?:\.\d+)?)\s*(hours?|hrs?|minutes?|mins?) on (.+)/i, handler: recordActual },

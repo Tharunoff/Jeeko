@@ -13,6 +13,7 @@ import { createAcademiaTools } from "../academia/academiaTools";
 import { ensureTodaysClassScheduleCache } from "../academia/classReminders";
 import { createAlarmTools } from "../alarms/alarmTools";
 import { createCancelTools } from "../academia/cancelTools";
+import { setVoiceEngine } from "../voice/speech";
 
 /** When Jeeko's answer is something better shown than said — a whole week's shape,
  * today's block-by-block schedule — the agent loop's tool calls already computed the
@@ -117,6 +118,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       // waste a request re-discovering that, and save future discoveries.
       setKeyPoolPersistence(db);
       await loadPersistedExhaustion(db);
+
+      const savedVoiceEngine = await db.getPreference("voice_engine");
+      if (savedVoiceEngine === "device" || savedVoiceEngine === "cloud") {
+        setVoiceEngine(savedVoiceEngine);
+      }
+
       if (hasAnyApiKey()) {
         providerRef.current = new GeminiProvider({ systemInstruction: PA_SYSTEM_PROMPT });
         setHasGemini(true);
@@ -157,6 +164,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       } else {
         providerRef.current = null;
         setHasGemini(false);
+      }
+
+      const savedVoiceEngine = await store.getPreference("voice_engine");
+      if (savedVoiceEngine === "device" || savedVoiceEngine === "cloud") {
+        setVoiceEngine(savedVoiceEngine);
       }
 
       // Refresh user profile

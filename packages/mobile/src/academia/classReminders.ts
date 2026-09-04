@@ -1,5 +1,5 @@
 import type { CalendarEvent, DataStore } from "@personalos/core";
-import { fetchAcademiaData, type AcademiaData } from "./academiaClient";
+import { fetchAcademiaData, fetchStudentPortalData, type AcademiaData } from "./academiaClient";
 import { resolveSlotTimes } from "./timeGrid";
 import { getCourseOverrides, isCancelled } from "./courseOverrides";
 
@@ -176,8 +176,11 @@ export type RefreshResult = { snapshot: CachedSchedule } | { error: string };
 export async function fetchAndSaveSnapshot(store: DataStore, now: Date = new Date()): Promise<RefreshResult> {
   const email = await store.getPreference("academia_email");
   const password = await store.getPreference("academia_password");
-  if (!email || !password) {
-    return { error: "Academia portal credentials aren't set up yet — add them in Settings → Academia Portal." };
+  const spNetId = await store.getPreference("student_portal_netid");
+  const spPassword = await store.getPreference("student_portal_password");
+
+  if (!email && !spNetId) {
+    return { error: "Portal credentials aren't set up yet — add them in Settings." };
   }
 
   const sessionRaw = await store.getPreference("academia_session");
@@ -188,20 +191,66 @@ export async function fetchAndSaveSnapshot(store: DataStore, now: Date = new Dat
     session = undefined;
   }
 
-  const data = await fetchAcademiaData(email, password, session);
-  if (!data) {
+  // Fetch Academia (timetable & schedule) and Student Portal (live attendance & marks)
+  const [academiaData, studentPortalData] = await Promise.all([
+    email && password ? fetchAcademiaData(email, password, session) : Promise.resolve(null),
+    spNetId && spPassword ? fetchStudentPortalData(spNetId, spPassword) : Promise.resolve(null)
+  ]);
+
+  if (!academiaData && !studentPortalData) {
     return {
       error:
-        "Couldn't reach the academia scraper or login failed. The server may be cold-starting (free tier, up to a minute after being idle) — try again shortly."
+        "Couldn't reach the scraper or login failed. Please check your credentials in Settings or try again shortly."
     };
   }
 
-  if (data.sessionData) {
-    store.setPreference("academia_session", JSON.stringify(data.sessionData)).catch(() => {});
+  if (academiaData?.sessionData) {
+    store.setPreference("academia_session", JSON.stringify(academiaData.sessionData)).catch(() => {});
   }
 
   const today = localDateKey(now);
-  const snapshot = await buildSnapshot(store, data, today);
+  let snapshot: CachedSchedule;
+
+  if (academiaData) {
+    snapshot = await buildSnapshot(store, academiaData, today);
+  } else {
+    snapshot = {
+      date: today,
+      dayOrder: null,
+      isHoliday: false,
+      isAttendanceAvailable: false,
+      overallAttendancePercent: null,
+      attendanceByCourse: [],
+      classes: [],
+      allCourses: []
+    };
+  }
+
+  // If Student Portal returned genuine attendance data, merge it into snapshot
+  if (studentPortalData?.attendance) {
+    const spAtt = studentPortalData.attendance;
+    snapshot.isAttendanceAvailable = true;
+    snapshot.overallAttendancePercent =
+      typeof spAtt.overall_attendance === "number" ? spAtt.overall_attendance : null;
+
+    if (Array.isArray(spAtt.courses) && spAtt.courses.length > 0) {
+      snapshot.attendanceByCourse = spAtt.courses.map((c) => ({
+        title: c.course_title || c.course_code,
+        slot: c.slot || "",
+        attendancePercent: c.attendance_percentage,
+        hoursConducted: c.hours_conducted,
+        hoursAbsent: c.hours_absent
+      }));
+
+      if (snapshot.allCourses.length === 0) {
+        snapshot.allCourses = spAtt.courses.map((c) => ({
+          code: c.course_code,
+          title: c.course_title
+        }));
+      }
+    }
+  }
+
   await saveSnapshot(store, snapshot);
   return { snapshot };
 }

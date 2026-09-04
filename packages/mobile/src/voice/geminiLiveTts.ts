@@ -65,8 +65,10 @@ function attemptLiveSpeech(key: string, text: string): Promise<LiveAudioResult |
         JSON.stringify({
           setup: {
             model: LIVE_MODEL,
-            generationConfig: { responseModalities: ["AUDIO"] },
-            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE_NAME } } }
+            generationConfig: {
+              responseModalities: ["AUDIO"],
+              speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE_NAME } } }
+            }
           }
         })
       );
