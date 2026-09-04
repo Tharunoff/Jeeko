@@ -5,14 +5,20 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
+    "icon": "./assets/icon.png",
     "ios": {
       "supportsTablet": true,
+      "icon": "./assets/icon.png",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Jeeko uses the microphone so you can talk to it instead of typing."
       }
     },
     "android": {
       "package": "com.personalos.app",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#011B4B"
+      },
       "softwareKeyboardLayoutMode": "pan",
       "permissions": [
         "RECORD_AUDIO",
