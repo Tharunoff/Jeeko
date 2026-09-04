@@ -23,14 +23,6 @@ COPY requirements.txt .
 RUN pip install --upgrade pip \
     && pip install --default-timeout=200 --retries=10 --no-cache-dir -r requirements.txt
 
-# Student Portal login goes through a real headless Chromium (via Playwright)
-# instead of hand-reconstructing the portal's obfuscated anti-bot payload —
-# the portal's own JS (canvas fingerprint, telemetry, domain-proof) runs for
-# real this way instead of being guessed at. --with-deps pulls in the system
-# libraries Chromium needs (fonts, codecs, etc.) that aren't already covered
-# by the tesseract/OpenCV deps above.
-RUN playwright install --with-deps chromium
-
 # Copy full project
 COPY . .
 

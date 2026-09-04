@@ -94,7 +94,7 @@ class StudentPortalScraper:
         self.hdn_form = "1"
         self.student_info: Dict[str, str] = {}
 
-    def _solve_captcha(self, image_bytes: bytes) -> str:
+    def _solve_captcha(self, image_bytes: bytes, mime_type: str = "image/png") -> str:
         if not image_bytes:
             return ""
 
@@ -109,7 +109,7 @@ class StudentPortalScraper:
                     # fast).
                     model="gemini-3.1-flash-lite",
                     contents=[
-                        types.Part.from_bytes(data=image_bytes, mime_type="image/png"),
+                        types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
                         "Read the exact 6 characters in this CAPTCHA image. Preserve exact case (uppercase/lowercase/numbers). Return ONLY the 6 characters, nothing else."
                     ]
                 )
@@ -133,110 +133,127 @@ class StudentPortalScraper:
 
     def login(self) -> Dict[str, Any]:
         """
-        Logs in via a REAL headless Chromium browser (Playwright) instead of
-        hand-reconstructing the portal's obfuscated anti-bot payload. That
-        reconstruction (domain-proof header, telemetry JSON, canvas
-        fingerprint, hidden trap fields, even a correctly-read CAPTCHA)
-        consistently failed silently — confirmed by deobfuscating the
-        portal's own JS: it has real, actively-maintained bot detection
-        (canvas fingerprinting, mouse/keystroke tracking, a field literally
-        named 'trapPayload'), the kind that commonly also gates on IP
-        reputation independent of payload correctness. A real browser lets
-        all of that run genuinely instead of being guessed at — the portal's
-        own JS computes its own hidden fields when we submit the real form.
+        Plain-requests login — no headless browser needed.
+
+        The earlier approach (both a hand-reconstructed payload AND a full
+        Playwright real-browser rewrite) kept failing at dashboard
+        verification despite a correctly-solved CAPTCHA and genuinely
+        computed anti-bot fields. Found a working, currently-in-production
+        reference (an actively-maintained SRM KTR student app hitting its
+        own hosted scraper) that proves the portal does NOT actually check
+        the canvas fingerprint / telemetry / domain-proof fields we spent so
+        long reconstructing — those are sent as plain empty strings. The
+        actual missing piece was a second POST back to the login page
+        (mirroring the portal's own client-side JS redirect) between the
+        login POST and loading the dashboard; skipping it left the session
+        half-authenticated, which is exactly the silent "Dashboard
+        verification failed" failure mode seen before.
         """
-        from playwright.sync_api import sync_playwright
+        for attempt in range(1, self.max_captcha_retries + 1):
+            print(f"[LOGIN] Attempt {attempt}/{self.max_captcha_retries} for NetID: {self.netid}")
 
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
             try:
-                context = browser.new_context(
-                    viewport={"width": 1366, "height": 768},
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
-                )
-                page = context.new_page()
-
-                for attempt in range(1, self.max_captcha_retries + 1):
-                    print(f"[LOGIN] Playwright attempt {attempt}/{self.max_captcha_retries} for NetID: {self.netid}")
-
-                    try:
-                        page.goto(self.LOGIN_PAGE_URL, wait_until="networkidle", timeout=20000)
-                    except Exception as e:
-                        print(f"[ERROR] Failed to load login page: {e}")
-                        continue
-
-                    # The page's own JS fetches the real captcha image via an
-                    # authenticated XHR after DOMContentLoaded and swaps it in
-                    # as a blob: URL — wait for that to actually happen rather
-                    # than screenshotting a placeholder.
-                    try:
-                        page.wait_for_function(
-                            "document.getElementById('secure_captcha') && "
-                            "document.getElementById('secure_captcha').src.startsWith('blob:')",
-                            timeout=10000
-                        )
-                    except Exception:
-                        print("[WARN] Captcha image didn't load in time, retrying...")
-                        continue
-
-                    captcha_el = page.query_selector("#secure_captcha")
-                    captcha_bytes = captcha_el.screenshot()
-                    solved_captcha = self._solve_captcha(captcha_bytes)
-                    if not solved_captcha or len(solved_captcha) < 4:
-                        print("[WARN] Invalid captcha resolution, retrying...")
-                        continue
-
-                    page.fill("#username", self.netid)
-                    page.fill("#password", self.password)
-                    page.fill("#captcha", solved_captcha)
-
-                    try:
-                        with page.expect_navigation(wait_until="networkidle", timeout=20000):
-                            # requestSubmit() (not a raw form.submit()) fires the
-                            # real 'submit' event, which is what the portal's own
-                            # guardlogin.js/secure2.js listen on to populate their
-                            # hidden anti-bot fields with genuine values.
-                            page.evaluate("document.getElementById('login_form').requestSubmit()")
-                    except Exception as e:
-                        print(f"[WARN] Navigation after submit didn't complete cleanly: {e}")
-
-                    content = page.content()
-
-                    if "temporarily locked" in content.lower():
-                        msg = "Your user ID is temporarily locked due to multiple unsuccessful attempts. Please try again in 5 minutes."
-                        print(f"[ERROR] {msg}")
-                        return {"success": False, "message": msg, "locked": True}
-
-                    if "invalid login credentials" in content.lower() or "attempts remaining" in content.lower():
-                        attempts_match = re.search(r"(\d+\s+out\s+of\s+\d+\s+login\s+attempts\s+remaining)", content, re.I)
-                        detail = f" ({attempts_match.group(1)})" if attempts_match else ""
-                        msg = f"Invalid NetID or Password on SRM Student Portal{detail}."
-                        print(f"[ERROR] {msg}")
-                        return {"success": False, "message": msg, "invalid_credentials": True}
-
-                    if "logout" in content.lower():
-                        print("[LOGIN] Successfully authenticated into SRM Student Portal (Playwright)!")
-                        # Hand the real, validly-obtained cookies to self.session
-                        # so the rest of scrape() (attendance/marks fetch) can
-                        # keep using plain `requests`, unchanged.
-                        for c in context.cookies():
-                            self.session.cookies.set(c["name"], c["value"], domain=c["domain"], path=c.get("path", "/"))
-                        self._extract_dashboard_meta(content)
-                        return {"success": True}
-
-                    print(f"[WARN] Dashboard verification failed on Playwright attempt {attempt}.")
-                    print(f"[DEBUG] page content (first 1000 chars): {content[:1000]}")
-                    time.sleep(1)
-
-                return {
-                    "success": False,
-                    "message": "Failed to log in to student portal. Please verify your credentials or try again later."
-                }
+                resp = self.session.get(self.LOGIN_PAGE_URL, timeout=15)
+                resp.raise_for_status()
             except Exception as e:
-                print(f"[ERROR] Playwright login error: {e}")
-                return {"success": False, "message": f"Browser automation error: {e}"}
-            finally:
-                browser.close()
+                print(f"[ERROR] Failed to load login page: {e}")
+                continue
+
+            token_match = re.search(r"SCaptchaServlet\?ts=.*?token=([a-z0-9\-]+)", resp.text, re.I)
+            if not token_match:
+                print("[WARN] Could not find captcha token on login page, retrying...")
+                continue
+
+            captcha_token = token_match.group(1)
+            captcha_url = f"{self.BASE_URL}/SCaptchaServlet?ts={int(time.time() * 1000)}&token={captcha_token}"
+
+            try:
+                captcha_resp = self.session.get(captcha_url, timeout=15)
+            except Exception as e:
+                print(f"[WARN] Failed to fetch captcha image: {e}")
+                continue
+
+            content_type = captcha_resp.headers.get("Content-Type", "")
+            if "image" not in content_type:
+                print(f"[WARN] Captcha endpoint didn't return an image (Content-Type: {content_type}), retrying...")
+                continue
+
+            captcha_bytes = captcha_resp.content
+            if not captcha_bytes or len(captcha_bytes) < 500:
+                print("[WARN] Captcha image looked too small/empty, retrying...")
+                continue
+
+            mime_type = content_type.split(";")[0].strip() or "image/png"
+            solved_captcha = self._solve_captcha(captcha_bytes, mime_type=mime_type)
+            if not solved_captcha or len(solved_captcha) < 4:
+                print("[WARN] Invalid captcha resolution, retrying...")
+                continue
+
+            print(f"[LOGIN] Submitting with captcha: '{solved_captcha}'")
+
+            login_payload = {
+                "username": self.netid,
+                "password": self.password,
+                "captcha": solved_captcha,
+                # Confirmed (via the working reference) that the portal does
+                # not actually validate these — they're sent empty on every
+                # successful login there too.
+                "fpPayload": "",
+                "fpToken": "",
+                "recaptchaToken": ""
+            }
+
+            try:
+                post_resp = self.session.post(self.LOGIN_ACTION_URL, data=login_payload, timeout=15)
+                post_resp.raise_for_status()
+            except Exception as e:
+                print(f"[WARN] Login POST failed: {e}")
+                continue
+
+            post_text_lower = post_resp.text.lower()
+
+            if "temporarily locked" in post_text_lower:
+                msg = "Your user ID is temporarily locked due to multiple unsuccessful attempts. Please try again in 5 minutes."
+                print(f"[ERROR] {msg}")
+                return {"success": False, "message": msg, "locked": True}
+
+            if "invalid captcha" in post_text_lower:
+                print("[WARN] Invalid CAPTCHA response, retrying...")
+                continue
+
+            if "invalid login credentials" in post_text_lower or "invalid credentials" in post_text_lower:
+                msg = "Invalid NetID or Password on SRM Student Portal."
+                print(f"[ERROR] {msg}")
+                return {"success": False, "message": msg, "invalid_credentials": True}
+
+            # Mirrors the portal's own client-side JS redirect after a
+            # successful login POST — without this the session stays
+            # half-authenticated and the dashboard fetch below silently
+            # looks like a fresh, logged-out login page.
+            try:
+                self.session.post(self.LOGIN_PAGE_URL, timeout=15)
+            except Exception as e:
+                print(f"[WARN] Post-login redirect POST failed: {e}")
+
+            try:
+                dash = self.session.get(self.DASHBOARD_URL, timeout=15)
+            except Exception as e:
+                print(f"[WARN] Dashboard fetch failed: {e}")
+                continue
+
+            if "logout" in dash.text.lower():
+                print("[LOGIN] Successfully authenticated into SRM Student Portal!")
+                self._extract_dashboard_meta(dash.text)
+                return {"success": True}
+
+            print(f"[WARN] Dashboard verification failed on attempt {attempt}.")
+            print(f"[DEBUG] dashboard content (first 500 chars): {dash.text[:500]}")
+            time.sleep(1)
+
+        return {
+            "success": False,
+            "message": "Failed to log in to student portal. Please verify your credentials or try again later."
+        }
 
     def _extract_dashboard_meta(self, dash_html: str):
         soup = BeautifulSoup(dash_html, "html.parser")
