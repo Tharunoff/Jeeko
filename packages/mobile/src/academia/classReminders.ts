@@ -32,6 +32,7 @@ export interface CachedClassEntry {
 export interface CachedCourseRef {
   code: string;
   title: string;
+  slot: string;
 }
 
 export interface CachedAttendanceCourse {
@@ -108,7 +109,7 @@ export async function buildSnapshot(store: DataStore, data: AcademiaData, today:
     classes.sort((a, b) => a.from.localeCompare(b.from));
   }
 
-  const allCourses: CachedCourseRef[] = data.courses.map((c) => ({ code: c.course_code, title: c.course_title }));
+  const allCourses: CachedCourseRef[] = data.courses.map((c) => ({ code: c.course_code, title: c.course_title, slot: c.slot }));
 
   return {
     date: today,
@@ -122,13 +123,30 @@ export async function buildSnapshot(store: DataStore, data: AcademiaData, today:
   };
 }
 
+const WEEK_SYNC_DAYS = 7;
+
+/** SRM's day order only reliably comes from the portal for TODAY — it isn't
+ * a fixed weekday mapping, since holidays shift the 5-day cycle unpredictably.
+ * For the rest of the week we don't have a live source, so this estimates it
+ * by cycling 1→2→3→4→5→1... once per non-Sunday day forward from today. This
+ * is a best-effort guess, not a guarantee — it can drift around a holiday —
+ * but it's what makes the Week view show class time at all for any day but
+ * today, instead of silently showing none. */
+function estimateDayOrder(baseDayOrder: number, offsetDays: number, date: Date): number | null {
+  if (date.getDay() === 0) return null; // Sunday — assume no classes
+  if (offsetDays === 0) return baseDayOrder;
+  return ((baseDayOrder - 1 + offsetDays) % 5) + 1;
+}
+
 /** Deletes calendar events created by a previous sync (tracked by id, since
  * they're on possibly-earlier dates), then creates one fixed "class" event
- * per today's (non-cancelled) class, and records the new id list for next
- * time. This is what makes classes actually count against free time in
- * calculate_capacity/get_today_schedule — those already sum up fixed
- * CalendarEvents, we're just feeding them real ones. */
-async function syncClassesToCalendar(store: DataStore, today: string, classes: CachedClassEntry[]): Promise<void> {
+ * per class across the next WEEK_SYNC_DAYS days (today's are exact, from
+ * classes; future days are estimated via estimateDayOrder + allCourses'
+ * slot codes), and records the new id list for next time. This is what
+ * makes classes actually count against free time in
+ * calculate_capacity/get_today_schedule/get_week_schedule — those already
+ * sum up fixed CalendarEvents, we're just feeding them real ones. */
+async function syncClassesToCalendar(store: DataStore, snapshot: CachedSchedule): Promise<void> {
   const prevIdsRaw = await store.getPreference(SYNCED_EVENT_IDS_KEY);
   let prevIds: string[] = [];
   try {
@@ -140,28 +158,56 @@ async function syncClassesToCalendar(store: DataStore, today: string, classes: C
     await store.deleteCalendarEvent(id).catch(() => {});
   }
 
+  const [ty, tm, td] = snapshot.date.split("-").map(Number);
+  const todayDate = new Date(ty, tm - 1, td);
+  const overrides = await getCourseOverrides(store, snapshot.date);
   const newIds: string[] = [];
-  for (const cls of classes) {
-    const [fh, fm] = cls.from.split(":").map(Number);
-    const [th, tm] = cls.to.split(":").map(Number);
-    const [y, mo, d] = today.split("-").map(Number);
-    const startTime = new Date(y, mo - 1, d, fh, fm, 0, 0);
-    const endTime = new Date(y, mo - 1, d, th, tm, 0, 0);
-    const id = calendarEventId(today, cls.code, cls.from);
-    const event: CalendarEvent = { id, title: cls.title, startTime, endTime, type: "class", fixed: true };
+
+  const makeEvent = async (dateKey: string, date: Date, code: string, title: string, from: string, to: string) => {
+    if (isCancelled(overrides, dateKey, code)) return;
+    const [fh, fm] = from.split(":").map(Number);
+    const [th, tm2] = to.split(":").map(Number);
+    const startTime = new Date(date.getFullYear(), date.getMonth(), date.getDate(), fh, fm, 0, 0);
+    const endTime = new Date(date.getFullYear(), date.getMonth(), date.getDate(), th, tm2, 0, 0);
+    const id = calendarEventId(dateKey, code, from);
+    const event: CalendarEvent = { id, title, startTime, endTime, type: "class", fixed: true };
     await store.saveCalendarEvent(event);
     newIds.push(id);
+  };
+
+  // Day 0: today's exact, already-resolved classes.
+  for (const cls of snapshot.classes) {
+    await makeEvent(snapshot.date, todayDate, cls.code, cls.title, cls.from, cls.to);
   }
+
+  // Days 1..N: estimated day order + slot resolution against allCourses.
+  if (snapshot.dayOrder !== null) {
+    for (let offset = 1; offset < WEEK_SYNC_DAYS; offset++) {
+      const date = new Date(todayDate.getTime() + offset * 86400000);
+      const dayOrder = estimateDayOrder(snapshot.dayOrder, offset, date);
+      if (dayOrder === null) continue;
+      const dateKey = localDateKey(date);
+      for (const c of snapshot.allCourses) {
+        if (!c.slot) continue;
+        const ranges = resolveSlotTimes(dayOrder, c.slot);
+        for (const r of ranges) {
+          await makeEvent(dateKey, date, c.code, c.title, r.from, r.to);
+        }
+      }
+    }
+  }
+
   await store.setPreference(SYNCED_EVENT_IDS_KEY, JSON.stringify(newIds));
 }
 
 /** Persists a snapshot (overwriting whatever was cached before — never a
- * growing log) and syncs its classes to the calendar. Exported so
- * get_academia_status's live-fallback/force-refresh path can save what it
- * fetched too, not just the boot-time refresh below. */
+ * growing log) and syncs its classes (today + the estimated rest of the
+ * week) to the calendar. Exported so get_academia_status's live-fallback/
+ * force-refresh path can save what it fetched too, not just the boot-time
+ * refresh below. */
 export async function saveSnapshot(store: DataStore, snapshot: CachedSchedule): Promise<void> {
   await store.setPreference(CACHE_KEY, JSON.stringify(snapshot));
-  await syncClassesToCalendar(store, snapshot.date, snapshot.classes);
+  await syncClassesToCalendar(store, snapshot);
 }
 
 export type RefreshResult = { snapshot: CachedSchedule } | { error: string };
@@ -245,7 +291,8 @@ export async function fetchAndSaveSnapshot(store: DataStore, now: Date = new Dat
       if (snapshot.allCourses.length === 0) {
         snapshot.allCourses = spAtt.courses.map((c) => ({
           code: c.course_code,
-          title: c.course_title
+          title: c.course_title,
+          slot: c.slot || ""
         }));
       }
     }

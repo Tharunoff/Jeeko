@@ -77,6 +77,37 @@ export async function scheduleNotifications(params: {
       .filter((b) => new Date(b.startTime).getTime() > now.getTime())
       .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
 
+    // 0. Daily "start of free time" nudge — once a day, right when today's
+    // first free window opens (or the next upcoming one, if some already
+    // passed before this scheduling pass ran), summarizing what's on today.
+    const capacityWindows = (schedule.capacity?.windows ?? [])
+      .slice()
+      .sort((a: any, b: any) => new Date(a.start).getTime() - new Date(b.start).getTime());
+    const nextFreeWindow = capacityWindows.find((w: any) => new Date(w.start).getTime() > now.getTime());
+    if (nextFreeWindow) {
+      const triggerMs = new Date(nextFreeWindow.start).getTime() - now.getTime();
+      if (triggerMs >= 10000) {
+        const titles = blocks
+          .slice()
+          .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
+          .map((b) => tasks.find((t) => t.id === b.taskId)?.title)
+          .filter((t): t is string => !!t);
+        const preview = titles.slice(0, 3).join(", ") + (titles.length > 3 ? `, +${titles.length - 3} more` : "");
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: "Free time just started",
+            body: titles.length > 0 ? `Today: ${preview}` : "No tasks planned yet — tell Jeeko what's on your plate.",
+            data: { type: "free_time_start" }
+          },
+          trigger: {
+            type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+            seconds: Math.floor(triggerMs / 1000),
+            channelId: CHANNEL_ID
+          }
+        });
+      }
+    }
+
     // 1. Next-block reminders (5 min before each upcoming block)
     for (const block of upcoming.slice(0, 5)) {
       const task = tasks.find((t) => t.id === block.taskId);

@@ -71,7 +71,11 @@ export function planDay(params: PlanDayParams): PlanDayResult {
     (t) =>
       ACTIVE_STATUSES.has(t.status) &&
       !blockedIds.has(t.id) &&
-      (!t.deferredUntil || localDateKey(t.deferredUntil, user.timezone) <= dateKey)
+      (!t.deferredUntil || localDateKey(t.deferredUntil, user.timezone) <= dateKey) &&
+      // A task's deadline never excluded it from being scheduled into days
+      // AFTER that deadline — it kept showing up in the week view forever.
+      // Still eligible on the deadline day itself, just not past it.
+      (!t.deadline || localDateKey(t.deadline, user.timezone) >= dateKey)
   );
 
   const adjustments = computeEstimationAdjustments(timeLogs, tasks);
