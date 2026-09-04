@@ -10,6 +10,7 @@ import json
 import base64
 import uuid
 import threading
+import urllib.parse
 import requests
 from typing import Dict, Any, List, Optional
 from bs4 import BeautifulSoup
@@ -242,7 +243,8 @@ class StudentPortalScraper:
             # half-authenticated and the dashboard fetch below silently
             # looks like a fresh, logged-out login page.
             try:
-                self.session.post(self.LOGIN_PAGE_URL, timeout=15)
+                redirect_resp = self.session.post(self.LOGIN_PAGE_URL, timeout=15)
+                self._follow_loader_chain(redirect_resp)
             except Exception as e:
                 print(f"[WARN] Post-login redirect POST failed: {e}")
 
@@ -251,6 +253,12 @@ class StudentPortalScraper:
             except Exception as e:
                 print(f"[WARN] Dashboard fetch failed: {e}")
                 continue
+
+            # A genuinely successful login can land on an intermediate
+            # "Please wait login screen is loading..." auto-submit page
+            # instead of the real dashboard — a plain requests.Session
+            # doesn't run its onload JS, so follow it by hand.
+            dash = self._follow_loader_chain(dash)
 
             if "logout" in dash.text.lower():
                 print("[LOGIN] Successfully authenticated into SRM Student Portal!")
@@ -312,6 +320,43 @@ class StudentPortalScraper:
             "mime_type": content_type.split(";")[0].strip() or "image/png"
         }
 
+    @staticmethod
+    def _resolve_loader_redirect(resp: requests.Response) -> Optional[str]:
+        """
+        The portal sometimes hands back an intermediate "Please wait login
+        screen is loading..." page instead of the real destination — its
+        only content is a form with no fields and an onload script that
+        auto-submits it to some action URL. A real browser executes that
+        immediately; a plain requests.Session doesn't run JS at all, so we
+        have to replicate the submit by hand. Returns the resolved absolute
+        URL to POST to next, or None if this response isn't one of those.
+        """
+        text_lower = resp.text.lower()
+        if "please wait" not in text_lower or "callme" not in text_lower:
+            return None
+        match = re.search(r'\.action\s*=\s*"([^"]+)"', resp.text) or re.search(r'action\s*=\s*"([^"]+)"', resp.text)
+        if not match:
+            return None
+        return urllib.parse.urljoin(resp.url, match.group(1))
+
+    def _follow_loader_chain(self, resp: requests.Response, max_hops: int = 4) -> requests.Response:
+        """Repeatedly follows the auto-submit loader page (see
+        _resolve_loader_redirect) until it stops appearing or max_hops is
+        hit, logging each hop for diagnosis."""
+        for hop in range(max_hops):
+            loader_url = self._resolve_loader_redirect(resp)
+            if not loader_url:
+                return resp
+            print(f"[DEBUG] Following auto-submit loader hop {hop + 1}: POST {loader_url}")
+            try:
+                resp = self.session.post(loader_url, timeout=15)
+            except Exception as e:
+                print(f"[WARN] Loader-follow POST failed: {e}")
+                return resp
+            print(f"[DEBUG] loader-follow status={resp.status_code} url={resp.url}")
+            print(f"[DEBUG] loader-follow content (first 800 chars): {resp.text[:800]}")
+        return resp
+
     def submit_manual_captcha(self, captcha_text: str) -> Dict[str, Any]:
         """
         Completes login using a human-read CAPTCHA, against the session
@@ -354,13 +399,18 @@ class StudentPortalScraper:
         if "invalid captcha" in post_text_lower:
             return {"success": False, "wrong_captcha": True, "message": "Incorrect captcha — please try again."}
 
+        # The login POST's own response might itself be the auto-submit
+        # loader (in one observed attempt it wasn't — it was the plain
+        # login-page shell — so this is a no-op then, but cheap to check).
+        post_resp = self._follow_loader_chain(post_resp)
+
         # Mirrors the portal's own client-side JS redirect after a
-        # successful login POST — without this the session stays
-        # half-authenticated and the dashboard fetch below silently looks
-        # like a fresh, logged-out login page.
+        # successful login POST.
         try:
             redirect_resp = self.session.post(self.LOGIN_PAGE_URL, timeout=15)
             print(f"[DEBUG] redirect POST status={redirect_resp.status_code}")
+            print(f"[DEBUG] redirect POST content (first 800 chars): {redirect_resp.text[:800]}")
+            redirect_resp = self._follow_loader_chain(redirect_resp)
         except Exception as e:
             print(f"[WARN] Post-login redirect POST failed: {e}")
 
@@ -371,6 +421,13 @@ class StudentPortalScraper:
 
         print(f"[DEBUG] dashboard fetch status={dash.status_code} url={dash.url}")
         print(f"[DEBUG] dashboard content (first 800 chars): {dash.text[:800]}")
+
+        # Confirmed via a live test: the portal hands back a "Please wait
+        # login screen is loading..." auto-submit page here on a genuinely
+        # correct login — following it (a plain requests.Session doesn't
+        # run its onload JS) is the actual missing final step.
+        dash = self._follow_loader_chain(dash)
+
         print(f"[DEBUG] session cookies after attempt: {list(self.session.cookies.keys())}")
 
         if "logout" in dash.text.lower():
