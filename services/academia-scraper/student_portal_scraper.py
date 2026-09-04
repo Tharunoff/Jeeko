@@ -278,7 +278,13 @@ class StudentPortalScraper:
                 self._extract_dashboard_meta(dash_html)
                 return {"success": True}
 
-            print(f"[WARN] Dashboard verification failed on attempt {attempt}")
+            # TEMP DIAGNOSTIC: none of the known outcome strings (invalid
+            # credentials, locked, invalid captcha, logout-success) matched
+            # the actual response — printing what the server really said
+            # instead of guessing at a fix blind.
+            print(f"[WARN] Dashboard verification failed on attempt {attempt}. POST status: {post_resp.status_code}")
+            print(f"[DEBUG] post_text (first 1500 chars): {post_text[:1500]}")
+            print(f"[DEBUG] dash_html (first 1000 chars, if fetched separately): {dash_html[:1000] if dash_html is not post_text else '(same as post_text)'}")
             time.sleep(1)
 
         return {
