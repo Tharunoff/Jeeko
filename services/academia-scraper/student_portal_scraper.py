@@ -332,6 +332,8 @@ class StudentPortalScraper:
             "recaptchaToken": ""
         }
 
+        print(f"[MANUAL LOGIN] Submitting with human-read captcha: '{captcha_text.strip()}'")
+
         try:
             post_resp = self.session.post(self.LOGIN_ACTION_URL, data=login_payload, timeout=15)
             post_resp.raise_for_status()
@@ -339,6 +341,8 @@ class StudentPortalScraper:
             return {"success": False, "message": f"Login request failed: {e}"}
 
         post_text_lower = post_resp.text.lower()
+        print(f"[DEBUG] manual login POST status={post_resp.status_code} url={post_resp.url}")
+        print(f"[DEBUG] manual login POST response (first 800 chars): {post_resp.text[:800]}")
 
         if "temporarily locked" in post_text_lower:
             return {
@@ -355,7 +359,8 @@ class StudentPortalScraper:
         # half-authenticated and the dashboard fetch below silently looks
         # like a fresh, logged-out login page.
         try:
-            self.session.post(self.LOGIN_PAGE_URL, timeout=15)
+            redirect_resp = self.session.post(self.LOGIN_PAGE_URL, timeout=15)
+            print(f"[DEBUG] redirect POST status={redirect_resp.status_code}")
         except Exception as e:
             print(f"[WARN] Post-login redirect POST failed: {e}")
 
@@ -363,6 +368,10 @@ class StudentPortalScraper:
             dash = self.session.get(self.DASHBOARD_URL, timeout=15)
         except Exception as e:
             return {"success": False, "message": f"Dashboard fetch failed: {e}"}
+
+        print(f"[DEBUG] dashboard fetch status={dash.status_code} url={dash.url}")
+        print(f"[DEBUG] dashboard content (first 800 chars): {dash.text[:800]}")
+        print(f"[DEBUG] session cookies after attempt: {list(self.session.cookies.keys())}")
 
         if "logout" in dash.text.lower():
             self._extract_dashboard_meta(dash.text)
@@ -667,6 +676,9 @@ def submit_manual_student_portal_captcha(attempt_id: str, captcha_text: str) -> 
             "expired": True,
             "message": "This captcha attempt expired or was already used. Please request a new one."
         }
+
+    elapsed_since_start = round(time.time() - entry["created_at"], 1)
+    print(f"[MANUAL LOGIN] Submitting {elapsed_since_start}s after the captcha was fetched.")
 
     scraper: StudentPortalScraper = entry["scraper"]
     login_res = scraper.submit_manual_captcha(captcha_text)
