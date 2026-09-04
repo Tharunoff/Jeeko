@@ -132,180 +132,111 @@ class StudentPortalScraper:
         return ""
 
     def login(self) -> Dict[str, Any]:
-        for attempt in range(1, self.max_captcha_retries + 1):
-            print(f"[LOGIN] Attempt {attempt}/{self.max_captcha_retries} for NetID: {self.netid}")
-            start_time_ms = int(time.time() * 1000)
+        """
+        Logs in via a REAL headless Chromium browser (Playwright) instead of
+        hand-reconstructing the portal's obfuscated anti-bot payload. That
+        reconstruction (domain-proof header, telemetry JSON, canvas
+        fingerprint, hidden trap fields, even a correctly-read CAPTCHA)
+        consistently failed silently — confirmed by deobfuscating the
+        portal's own JS: it has real, actively-maintained bot detection
+        (canvas fingerprinting, mouse/keystroke tracking, a field literally
+        named 'trapPayload'), the kind that commonly also gates on IP
+        reputation independent of payload correctness. A real browser lets
+        all of that run genuinely instead of being guessed at — the portal's
+        own JS computes its own hidden fields when we submit the real form.
+        """
+        from playwright.sync_api import sync_playwright
 
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
             try:
-                resp = self.session.get(self.LOGIN_PAGE_URL, timeout=15)
-                resp.raise_for_status()
-                html = resp.text
+                context = browser.new_context(
+                    viewport={"width": 1366, "height": 768},
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+                )
+                page = context.new_page()
+
+                for attempt in range(1, self.max_captcha_retries + 1):
+                    print(f"[LOGIN] Playwright attempt {attempt}/{self.max_captcha_retries} for NetID: {self.netid}")
+
+                    try:
+                        page.goto(self.LOGIN_PAGE_URL, wait_until="networkidle", timeout=20000)
+                    except Exception as e:
+                        print(f"[ERROR] Failed to load login page: {e}")
+                        continue
+
+                    # The page's own JS fetches the real captcha image via an
+                    # authenticated XHR after DOMContentLoaded and swaps it in
+                    # as a blob: URL — wait for that to actually happen rather
+                    # than screenshotting a placeholder.
+                    try:
+                        page.wait_for_function(
+                            "document.getElementById('secure_captcha') && "
+                            "document.getElementById('secure_captcha').src.startsWith('blob:')",
+                            timeout=10000
+                        )
+                    except Exception:
+                        print("[WARN] Captcha image didn't load in time, retrying...")
+                        continue
+
+                    captcha_el = page.query_selector("#secure_captcha")
+                    captcha_bytes = captcha_el.screenshot()
+                    solved_captcha = self._solve_captcha(captcha_bytes)
+                    if not solved_captcha or len(solved_captcha) < 4:
+                        print("[WARN] Invalid captcha resolution, retrying...")
+                        continue
+
+                    page.fill("#username", self.netid)
+                    page.fill("#password", self.password)
+                    page.fill("#captcha", solved_captcha)
+
+                    try:
+                        with page.expect_navigation(wait_until="networkidle", timeout=20000):
+                            # requestSubmit() (not a raw form.submit()) fires the
+                            # real 'submit' event, which is what the portal's own
+                            # guardlogin.js/secure2.js listen on to populate their
+                            # hidden anti-bot fields with genuine values.
+                            page.evaluate("document.getElementById('login_form').requestSubmit()")
+                    except Exception as e:
+                        print(f"[WARN] Navigation after submit didn't complete cleanly: {e}")
+
+                    content = page.content()
+
+                    if "temporarily locked" in content.lower():
+                        msg = "Your user ID is temporarily locked due to multiple unsuccessful attempts. Please try again in 5 minutes."
+                        print(f"[ERROR] {msg}")
+                        return {"success": False, "message": msg, "locked": True}
+
+                    if "invalid login credentials" in content.lower() or "attempts remaining" in content.lower():
+                        attempts_match = re.search(r"(\d+\s+out\s+of\s+\d+\s+login\s+attempts\s+remaining)", content, re.I)
+                        detail = f" ({attempts_match.group(1)})" if attempts_match else ""
+                        msg = f"Invalid NetID or Password on SRM Student Portal{detail}."
+                        print(f"[ERROR] {msg}")
+                        return {"success": False, "message": msg, "invalid_credentials": True}
+
+                    if "logout" in content.lower():
+                        print("[LOGIN] Successfully authenticated into SRM Student Portal (Playwright)!")
+                        # Hand the real, validly-obtained cookies to self.session
+                        # so the rest of scrape() (attendance/marks fetch) can
+                        # keep using plain `requests`, unchanged.
+                        for c in context.cookies():
+                            self.session.cookies.set(c["name"], c["value"], domain=c["domain"], path=c.get("path", "/"))
+                        self._extract_dashboard_meta(content)
+                        return {"success": True}
+
+                    print(f"[WARN] Dashboard verification failed on Playwright attempt {attempt}.")
+                    print(f"[DEBUG] page content (first 1000 chars): {content[:1000]}")
+                    time.sleep(1)
+
+                return {
+                    "success": False,
+                    "message": "Failed to log in to student portal. Please verify your credentials or try again later."
+                }
             except Exception as e:
-                print(f"[ERROR] Could not fetch login page: {e}")
-                if attempt == self.max_captcha_retries:
-                    return {"success": False, "message": f"Connection error: {e}"}
-                time.sleep(1)
-                continue
-
-            soup = BeautifulSoup(html, "html.parser")
-
-            nonce_match = re.search(r"nonce\s*:\s*'([^']+)'", html)
-            nonce = nonce_match.group(1) if nonce_match else ""
-
-            captcha_img = soup.find(id="secure_captcha")
-            data_src = captcha_img.get("data-src") if captcha_img else ""
-            if not data_src:
-                token_match = re.search(r"SCaptchaServlet\?ts=.*?token=([a-z0-9\-]+)", html, re.I)
-                if token_match:
-                    data_src = f"/srmiststudentportal/SCaptchaServlet?ts={int(time.time()*1000)}&token={token_match.group(1)}"
-
-            captcha_url = requests.compat.urljoin(self.LOGIN_PAGE_URL, data_src)
-
-            dtoken_match = re.search(r"window\.SECURE_CONFIG\.domainFieldName\s*=\s*'([^']+)';", html)
-            cptoken_match = re.search(r"window\.SECURE_CONFIG\.captchaFieldName\s*=\s*'([^']+)';", html)
-            delim_match = re.search(r"window\.SECURE_CONFIG\.randomDelimiter\s*=\s*'([^']+)';", html)
-            # DIAGNOSTIC FINDING: the login page's own inline JS embeds
-            # window.SECURE_CONFIG.captchaText — literally the expected
-            # answer — confirmed present in a real response body. Trying it
-            # directly first (skips the image fetch + OCR/Gemini call
-            # entirely, and removes any read-accuracy uncertainty); falls
-            # back to solving the CAPTCHA image the old way if this field
-            # isn't present on some future page variant, or if using it
-            # doesn't actually work (can't rule out this being a canary
-            # value rather than the real one without testing it live).
-            captcha_text_match = re.search(r"window\.SECURE_CONFIG\.captchaText\s*=\s*'([^']+)';", html)
-
-            dtoken_name = dtoken_match.group(1) if dtoken_match else "domainProof"
-            cptoken_name = cptoken_match.group(1) if cptoken_match else "captchaProof"
-            random_delim = delim_match.group(1) if delim_match else "4fe0"
-
-            if captcha_text_match:
-                solved_captcha = captcha_text_match.group(1)
-                print(f"[CAPTCHA] Using embedded captchaText from page JS: '{solved_captcha}'")
-            else:
-                domain_proof = base64.b64encode(f"{nonce}:sp.srmist.edu.in".encode()).decode()
-                try:
-                    c_resp = self.session.get(
-                        captcha_url,
-                        headers={
-                            "X-Domain-Proof": domain_proof,
-                            "Accept": "image/jpeg, image/png, image/svg+xml, image/*",
-                            "Referer": self.LOGIN_PAGE_URL,
-                            "X-Requested-With": "XMLHttpRequest"
-                        },
-                        timeout=10
-                    )
-                    captcha_bytes = c_resp.content
-                except Exception as e:
-                    print(f"[ERROR] Failed to fetch captcha: {e}")
-                    continue
-
-                solved_captcha = self._solve_captcha(captcha_bytes)
-
-            if not solved_captcha or len(solved_captcha) < 4:
-                print("[WARN] Invalid captcha resolution, retrying...")
-                continue
-
-            time.sleep(2)
-
-            payload: Dict[str, Any] = {}
-            form = soup.find("form")
-            if form:
-                for inp in form.find_all("input"):
-                    name = inp.get("name")
-                    if name:
-                        payload[name] = inp.get("value", "")
-
-            payload["username"] = self.netid
-            payload["password"] = self.password
-            payload["captcha"] = solved_captcha
-            payload[dtoken_name] = base64.b64encode("sp.srmist.edu.in"[::-1].encode()).decode()
-
-            now_ms = int(time.time() * 1000)
-            elapsed_sec = max(2, int((now_ms - start_time_ms) / 1000))
-            interact_count = 8
-            payload[cptoken_name] = base64.b64encode(f"{elapsed_sec}{random_delim}{interact_count}".encode()).decode()
-
-            telemetry_data = {
-                "startTime": start_time_ms,
-                "currentDomain": "sp.srmist.edu.in",
-                "timezoneOffset": -330,
-                "screenWidth": 1920,
-                "screenHeight": 1080,
-                "colorDepth": 24,
-                "devicePixelRatio": 1,
-                "platform": "Win32",
-                "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-                "language": "en-US",
-                "hardwareConcurrency": 12,
-                "deviceMemory": 16,
-                "touchSupport": False,
-                "webdriver": False,
-                "mouseClicks": 2,
-                "mouseMovements": 22,
-                "keystrokeCount": 16,
-                "typingSpeedMs": 1800,
-                "canvasHash": "270ca88",
-                "submitTime": now_ms,
-                "timeOnPageMs": now_ms - start_time_ms
-            }
-            payload["telemetryPayload"] = base64.b64encode(json.dumps(telemetry_data).encode()).decode()
-
-            for k in list(payload.keys()):
-                if k.startswith("ph_"):
-                    payload[k] = ""
-
-            try:
-                post_resp = self.session.post(self.LOGIN_ACTION_URL, data=payload, allow_redirects=True, timeout=15)
-                post_text = post_resp.text
-            except Exception as e:
-                print(f"[ERROR] POST LoginServlet failed: {e}")
-                continue
-
-            if "temporarily locked" in post_text.lower():
-                msg = "Your user ID is temporarily locked due to multiple unsuccessful attempts. Please try again in 5 minutes."
-                print(f"[ERROR] {msg}")
-                return {"success": False, "message": msg, "locked": True}
-
-            if "invalid login credentials" in post_text.lower() or "attempts remaining" in post_text.lower():
-                attempts_match = re.search(r"(\d+\s+out\s+of\s+\d+\s+login\s+attempts\s+remaining)", post_text, re.I)
-                detail = f" ({attempts_match.group(1)})" if attempts_match else ""
-                msg = f"Invalid NetID or Password on SRM Student Portal{detail}."
-                print(f"[ERROR] {msg}")
-                return {"success": False, "message": msg, "invalid_credentials": True}
-
-            if "invalid captcha" in post_text.lower():
-                print(f"[WARN] Portal reported invalid CAPTCHA. Retrying (attempt {attempt})...")
-                time.sleep(1)
-                continue
-
-            dash_html = post_text
-            if "logout" not in dash_html.lower():
-                try:
-                    dash_resp = self.session.get(self.DASHBOARD_URL, timeout=15)
-                    dash_html = dash_resp.text
-                except Exception as e:
-                    print(f"[ERROR] Fetching dashboard failed: {e}")
-                    continue
-
-            if "logout" in dash_html.lower():
-                print("✓ [LOGIN] Successfully authenticated into SRM Student Portal!")
-                self._extract_dashboard_meta(dash_html)
-                return {"success": True}
-
-            # TEMP DIAGNOSTIC: none of the known outcome strings (invalid
-            # credentials, locked, invalid captcha, logout-success) matched
-            # the actual response — printing what the server really said
-            # instead of guessing at a fix blind.
-            print(f"[WARN] Dashboard verification failed on attempt {attempt}. POST status: {post_resp.status_code}")
-            print(f"[DEBUG] post_text (first 1500 chars): {post_text[:1500]}")
-            print(f"[DEBUG] dash_html (first 1000 chars, if fetched separately): {dash_html[:1000] if dash_html is not post_text else '(same as post_text)'}")
-            time.sleep(1)
-
-        return {
-            "success": False,
-            "message": "Failed to log in to student portal. Please verify your credentials or try again later."
-        }
+                print(f"[ERROR] Playwright login error: {e}")
+                return {"success": False, "message": f"Browser automation error: {e}"}
+            finally:
+                browser.close()
 
     def _extract_dashboard_meta(self, dash_html: str):
         soup = BeautifulSoup(dash_html, "html.parser")

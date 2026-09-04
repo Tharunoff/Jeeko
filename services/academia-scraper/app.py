@@ -209,8 +209,13 @@ async def scrape_student_portal_endpoint(request: StudentPortalRequest):
 
 
 @app.post("/student_portal/attendance_and_marks")
-async def scrape_student_attendance_and_marks_endpoint(request: StudentPortalRequest):
-    """Scrape strictly attendance and internal marks from SRM student portal"""
+def scrape_student_attendance_and_marks_endpoint(request: StudentPortalRequest):
+    """Scrape strictly attendance and internal marks from SRM student portal.
+    Plain `def`, not `async def`, on purpose — FastAPI runs sync endpoints in
+    a worker thread automatically, which is required here since the scraper
+    uses Playwright's *sync* API (student_portal_scraper.py) and sync
+    Playwright cannot run inside the main asyncio event loop an `async def`
+    endpoint would execute on."""
     try:
         result = scrape_student_attendance_and_marks(request.netid, request.password)
         if result.get("status") == "error":
