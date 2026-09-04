@@ -101,7 +101,13 @@ class StudentPortalScraper:
         if self.gemini_client:
             try:
                 response = self.gemini_client.models.generate_content(
-                    model="gemini-3.6-flash",
+                    # Same lite model the mobile app uses elsewhere — verified it
+                    # accepts image input fine, and its free-tier daily quota is
+                    # far more generous than gemini-3.6-flash's (confirmed via a
+                    # real 429 body earlier: ~20 requests/day on that tier, which
+                    # a single login's multiple CAPTCHA retries could burn through
+                    # fast).
+                    model="gemini-3.1-flash-lite",
                     contents=[
                         types.Part.from_bytes(data=image_bytes, mime_type="image/png"),
                         "Read the exact 6 characters in this CAPTCHA image. Preserve exact case (uppercase/lowercase/numbers). Return ONLY the 6 characters, nothing else."
