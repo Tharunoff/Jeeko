@@ -103,6 +103,10 @@ interface PageContext {
   domainFieldName: string;
   captchaFieldName: string;
   randomDelimiter: string;
+  /** The captcha answer, sitting in the login page's own SECURE_CONFIG. If
+   * this equals the rendered image, the captcha is theatre and the real gate
+   * is the trap fields — and we can drop the human-read step entirely. */
+  captchaText: string | null;
   loadTime: number;
 }
 
@@ -113,8 +117,9 @@ function parsePageContext(html: string): PageContext | null {
   const domainFieldName = html.match(/SECURE_CONFIG\.domainFieldName\s*=\s*'([^']+)'/)?.[1];
   const captchaFieldName = html.match(/SECURE_CONFIG\.captchaFieldName\s*=\s*'([^']+)'/)?.[1];
   const randomDelimiter = html.match(/SECURE_CONFIG\.randomDelimiter\s*=\s*'([^']+)'/)?.[1];
+  const captchaText = html.match(/SECURE_CONFIG\.captchaText\s*=\s*'([^']+)'/)?.[1] ?? null;
   if (!nonce || !domainFieldName || !captchaFieldName || !randomDelimiter) return null;
-  return { nonce, domainFieldName, captchaFieldName, randomDelimiter, loadTime: Date.now() };
+  return { nonce, domainFieldName, captchaFieldName, randomDelimiter, captchaText, loadTime: Date.now() };
 }
 
 const B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -333,7 +338,7 @@ export async function startDirectLogin(): Promise<DirectLoginStartResult> {
     if (!pageContext) {
       log("WARNING: could not parse SECURE_CONFIG from login page");
     } else {
-      log(`page context: domainField=${pageContext.domainFieldName} captchaField=${pageContext.captchaFieldName} delim=${pageContext.randomDelimiter}`);
+      log(`page context: domainField=${pageContext.domainFieldName} captchaField=${pageContext.captchaFieldName} delim=${pageContext.randomDelimiter} captchaText=${pageContext.captchaText}`);
     }
 
     const captchaUrl = `${BASE_URL}/SCaptchaServlet?ts=${Date.now()}&token=${tokenMatch[1]}`;
@@ -374,7 +379,15 @@ export async function startDirectLogin(): Promise<DirectLoginStartResult> {
  * a bot check rather than failing authentication.
  */
 function buildLoginFields(netid: string, password: string, captchaText: string): Record<string, string> {
-  const captcha = captchaText.trim();
+  const typed = captchaText.trim();
+  // Decisive, zero-guess diagnostic: does the answer the user read off the
+  // image match the captchaText the page already handed us? If yes, the
+  // captcha is not our blocker; if no, captchaText is a decoy and image OCR
+  // is genuinely required.
+  const fromPage = pageContext?.captchaText ?? "(none)";
+  log(`captcha check: typed='${typed}' pageCaptchaText='${fromPage}' match=${typed.toLowerCase() === fromPage.toLowerCase()}`);
+
+  const captcha = typed;
   const fields: Record<string, string> = {
     username: netid.split("@")[0].trim(),
     password,
