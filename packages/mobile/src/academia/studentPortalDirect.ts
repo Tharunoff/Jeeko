@@ -75,11 +75,50 @@ export type DirectLoginSubmitResult =
   | { success: true; data: StudentPortalResult }
   | { success: false; message: string; wrongCaptcha?: boolean; locked?: boolean };
 
+/**
+ * Explicit cookie jar. React Native's native HTTP stacks usually persist
+ * cookies across fetch calls on their own, but "usually" isn't good enough
+ * here: if they don't, the login POST arrives with no session, the captcha
+ * token is orphaned, and the failure is indistinguishable from the portal
+ * rejecting us — which is exactly the ambiguity that made the first
+ * on-device attempt uninterpretable. Tracking them by hand removes the
+ * platform from the equation.
+ */
+let cookieJar: Record<string, string> = {};
+
+function resetCookies() {
+  cookieJar = {};
+}
+
+function captureCookies(response: Response) {
+  // RN exposes Set-Cookie (no CORS sandbox to hide it); multiple cookies
+  // arrive comma-joined, so split on commas that begin a new `name=` pair.
+  const raw = response.headers.get("set-cookie");
+  if (!raw) return;
+  for (const piece of raw.split(/,(?=\s*[A-Za-z0-9_-]+=)/)) {
+    const [pair] = piece.split(";");
+    const idx = pair.indexOf("=");
+    if (idx <= 0) continue;
+    cookieJar[pair.slice(0, idx).trim()] = pair.slice(idx + 1).trim();
+  }
+}
+
+function cookieHeader(): string {
+  return Object.entries(cookieJar)
+    .map(([k, v]) => `${k}=${v}`)
+    .join("; ");
+}
+
+export function debugCookieNames(): string[] {
+  return Object.keys(cookieJar);
+}
+
 async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const cookies = cookieHeader();
   try {
-    return await fetch(url, {
+    const response = await fetch(url, {
       ...init,
       signal: controller.signal,
       credentials: "include",
@@ -87,9 +126,12 @@ async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Re
         "User-Agent": USER_AGENT,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
+        ...(cookies ? { Cookie: cookies } : {}),
         ...(init.headers ?? {})
       }
     });
+    captureCookies(response);
+    return response;
   } finally {
     clearTimeout(timeout);
   }
@@ -165,6 +207,7 @@ async function followLoaderChain(response: Response, html: string, maxHops = 4):
  */
 export async function startDirectLogin(): Promise<DirectLoginStartResult> {
   try {
+    resetCookies();
     const pageRes = await fetchWithTimeout(LOGIN_PAGE_URL);
     const pageHtml = await pageRes.text();
 
@@ -230,13 +273,28 @@ export async function submitDirectLogin(netid: string, password: string, captcha
     });
 
     const dashRes = await fetchWithTimeout(DASHBOARD_URL, { headers: { Referer: LOGIN_PAGE_URL } });
-    const { html: dashHtml } = await followLoaderChain(dashRes, await dashRes.text());
+    const dashRaw = await dashRes.text();
+    const sawLoader = dashRaw.toLowerCase().includes("please wait");
+    const { html: dashHtml } = await followLoaderChain(dashRes, dashRaw);
 
     if (!dashHtml.toLowerCase().includes("logout")) {
+      // Which of these shows up says *where* it broke: no cookies at all
+      // means the platform dropped the session (our problem); cookies
+      // present but still bounced to a login page means the portal
+      // rejected us (their WAF).
+      const cookies = debugCookieNames();
+      const landedOn = dashHtml.toLowerCase().includes("secure_config")
+        ? "login-page"
+        : sawLoader
+          ? "loader-only"
+          : "unknown";
       return {
         success: false,
         wrongCaptcha: true,
-        message: "Login didn't go through — double-check the captcha, or your NetID/password in Settings."
+        message:
+          "Login didn't go through — double-check the captcha, or your NetID/password in Settings.\n\n" +
+          `[diag] cookies=${cookies.length ? cookies.join(",") : "NONE"} · login-resp=${loginHtml.length}b · ` +
+          `loader=${sawLoader ? "yes" : "no"} · landed=${landedOn}`
       };
     }
 
