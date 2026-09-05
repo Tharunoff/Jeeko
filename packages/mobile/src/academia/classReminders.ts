@@ -1,12 +1,6 @@
 import type { CalendarEvent, DataStore } from "@personalos/core";
-import {
-  fetchAcademiaData,
-  fetchStudentPortalData,
-  startStudentPortalManualLogin,
-  submitStudentPortalCaptcha,
-  type AcademiaData,
-  type StudentPortalData
-} from "./academiaClient";
+import { fetchAcademiaData, fetchStudentPortalData, type AcademiaData, type StudentPortalData } from "./academiaClient";
+import { startDirectLogin, submitDirectLogin, type StudentPortalResult } from "./studentPortalDirect";
 import { resolveSlotTimes } from "./timeGrid";
 import { getCourseOverrides, isCancelled } from "./courseOverrides";
 
@@ -328,9 +322,10 @@ export async function fetchAndSaveSnapshot(store: DataStore, now: Date = new Dat
 }
 
 export interface ManualRefreshSession {
-  attemptId: string;
-  captchaImageBase64: string;
-  mimeType: string;
+  /** data: URI, ready for <Image source={{ uri }} /> */
+  captchaImageUri: string;
+  netid: string;
+  password: string;
   academiaDataPromise: Promise<AcademiaData | null>;
 }
 
@@ -341,8 +336,12 @@ export type ManualRefreshStartResult = { session: ManualRefreshSession } | { err
  * Academia (timetable) fetch in the background while fetching the real,
  * un-solved Student Portal CAPTCHA image for the user to read and type in
  * themselves — these CAPTCHAs are distorted enough that automated OCR
- * (including Gemini vision) has proven unreliable, so a human reading it is
- * the actual missing step, not the request/payload construction.
+ * (including Gemini vision) has proven unreliable.
+ *
+ * The Student Portal half runs ON-DEVICE (see academia/studentPortalDirect),
+ * not through our scraper service: every server-side attempt was silently
+ * rejected regardless of how the request was built — even a real headless
+ * browser — leaving the datacenter origin IP as the last untested variable.
  */
 export async function startManualRefresh(store: DataStore): Promise<ManualRefreshStartResult> {
   const email = await store.getPreference("academia_email");
@@ -364,16 +363,16 @@ export async function startManualRefresh(store: DataStore): Promise<ManualRefres
 
   const academiaDataPromise = email && password ? fetchAcademiaData(email, password, academiaSession) : Promise.resolve(null);
 
-  const captchaResult = await startStudentPortalManualLogin(spNetId, spPassword);
+  const captchaResult = await startDirectLogin();
   if (!captchaResult.success) {
     return { error: captchaResult.message };
   }
 
   return {
     session: {
-      attemptId: captchaResult.attemptId,
-      captchaImageBase64: captchaResult.captchaImageBase64,
-      mimeType: captchaResult.mimeType,
+      captchaImageUri: captchaResult.challenge.captchaImageUri,
+      netid: spNetId,
+      password: spPassword,
       academiaDataPromise
     }
   };
@@ -395,14 +394,16 @@ export async function submitManualRefresh(
   captchaText: string,
   now: Date = new Date()
 ): Promise<ManualRefreshSubmitResult> {
-  const [submitResult, academiaData] = await Promise.all([submitStudentPortalCaptcha(session.attemptId, captchaText), session.academiaDataPromise]);
+  const [submitResult, academiaData] = await Promise.all([
+    submitDirectLogin(session.netid, session.password, captchaText),
+    session.academiaDataPromise
+  ]);
 
   if (!submitResult.success) {
     return {
       error: submitResult.message,
       wrongCaptcha: submitResult.wrongCaptcha,
-      locked: submitResult.locked,
-      expired: submitResult.expired
+      locked: submitResult.locked
     };
   }
 
@@ -411,10 +412,47 @@ export async function submitManualRefresh(
   }
 
   const today = localDateKey(now);
-  const snapshot = await buildSnapshotFromSources(store, academiaData, submitResult.data, today);
+  const snapshot = await buildSnapshotFromSources(store, academiaData, toStudentPortalData(submitResult.data), today);
 
   await saveSnapshot(store, snapshot);
   return { snapshot };
+}
+
+/** Adapts the on-device scraper's result to the shape
+ * buildSnapshotFromSources already consumes (which mirrors the scraper
+ * service's JSON), so both refresh paths keep sharing one merge. */
+function toStudentPortalData(result: StudentPortalResult): StudentPortalData {
+  return {
+    status: "success",
+    student_info: { reg_no: result.studentInfo.regNo, name: result.studentInfo.name },
+    attendance: {
+      courses: result.attendance.courses.map((c) => ({
+        course_code: c.courseCode,
+        course_title: c.courseTitle,
+        category: c.category,
+        faculty_name: c.facultyName,
+        slot: c.slot,
+        hours_conducted: c.hoursConducted,
+        hours_absent: c.hoursAbsent,
+        attendance_percentage: c.attendancePercentage
+      })),
+      overall_attendance: result.attendance.overallAttendance,
+      total_hours_conducted: result.attendance.totalHoursConducted,
+      total_hours_absent: result.attendance.totalHoursAbsent
+    },
+    marks: {
+      courses: result.marks.courses.map((c) => ({
+        course_code: c.courseCode,
+        course_title: c.courseTitle,
+        components: c.components.map((comp) => ({
+          test_name: comp.testName,
+          marks_obtained: comp.marksObtained,
+          max_marks: comp.maxMarks,
+          raw_text: comp.rawText
+        }))
+      }))
+    }
+  };
 }
 
 /**

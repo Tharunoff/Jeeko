@@ -284,11 +284,7 @@ export function AttendanceScreen({ onOpenSettings }: { onOpenSettings: () => voi
           </Text>
 
           {captchaSession && (
-            <Image
-              source={{ uri: `data:${captchaSession.mimeType};base64,${captchaSession.captchaImageBase64}` }}
-              style={styles.captchaImage}
-              resizeMode="contain"
-            />
+            <Image source={{ uri: captchaSession.captchaImageUri }} style={styles.captchaImage} resizeMode="contain" />
           )}
 
           <TextInput
