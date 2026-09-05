@@ -113,11 +113,18 @@ export function debugCookieNames(): string[] {
   return Object.keys(cookieJar);
 }
 
+/** Tagged so it can be isolated in logcat:
+ *  adb logcat | grep "\[SP\]" */
+function log(...parts: unknown[]) {
+  console.log("[SP]", ...parts);
+}
+
 async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   const cookies = cookieHeader();
   try {
+    log(`→ ${init.method ?? "GET"} ${url} | sending cookies: ${cookies || "(none)"}`);
     const response = await fetch(url, {
       ...init,
       signal: controller.signal,
@@ -131,6 +138,7 @@ async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Re
       }
     });
     captureCookies(response);
+    log(`← ${response.status} ${url} | set-cookie: ${response.headers.get("set-cookie") ?? "(none)"} | jar now: ${Object.keys(cookieJar).join(",") || "(empty)"}`);
     return response;
   } finally {
     clearTimeout(timeout);
@@ -254,6 +262,7 @@ export async function submitDirectLogin(netid: string, password: string, captcha
     });
     const loginHtml = await loginRes.text();
     const loginLower = loginHtml.toLowerCase();
+    log(`login POST body (${loginHtml.length}b), first 600:`, loginHtml.slice(0, 600));
 
     if (loginLower.includes("temporarily locked")) {
       return {
@@ -275,7 +284,10 @@ export async function submitDirectLogin(netid: string, password: string, captcha
     const dashRes = await fetchWithTimeout(DASHBOARD_URL, { headers: { Referer: LOGIN_PAGE_URL } });
     const dashRaw = await dashRes.text();
     const sawLoader = dashRaw.toLowerCase().includes("please wait");
+    log(`dashboard body (${dashRaw.length}b) loader=${sawLoader}, first 600:`, dashRaw.slice(0, 600));
     const { html: dashHtml } = await followLoaderChain(dashRes, dashRaw);
+    log(`after loader chain (${dashHtml.length}b), first 600:`, dashHtml.slice(0, 600));
+    log(`has 'logout'? ${dashHtml.toLowerCase().includes("logout")}`);
 
     if (!dashHtml.toLowerCase().includes("logout")) {
       // Which of these shows up says *where* it broke: no cookies at all
