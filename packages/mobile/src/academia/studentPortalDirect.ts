@@ -119,6 +119,24 @@ function log(...parts: unknown[]) {
   console.log("[SP]", ...parts);
 }
 
+/** Surfaces whatever the portal is actually saying back to us. It answers a
+ * rejected login with the login page plus a rendered message, and we've been
+ * guessing at that message's wording — so pull every plausible carrier of it
+ * rather than testing for one phrase at a time. */
+function logMessageRegions(html: string) {
+  const keywords = /(invalid|incorrect|wrong|error|failed|attempt|locked|expire|captcha|denied|alert)/gi;
+  const seen = new Set<string>();
+  for (const match of html.matchAll(keywords)) {
+    const idx = match.index ?? 0;
+    const snippet = html.slice(Math.max(0, idx - 180), idx + 180).replace(/\s+/g, " ");
+    if (seen.has(snippet)) continue;
+    seen.add(snippet);
+    log(`msg-region [${match[0]}]:`, snippet);
+    if (seen.size >= 12) break;
+  }
+  log("tail 900:", html.slice(-900).replace(/\s+/g, " "));
+}
+
 async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -263,6 +281,10 @@ export async function submitDirectLogin(netid: string, password: string, captcha
     const loginHtml = await loginRes.text();
     const loginLower = loginHtml.toLowerCase();
     log(`login POST body (${loginHtml.length}b), first 600:`, loginHtml.slice(0, 600));
+    // The login response runs ~700b longer than a plain login page, which
+    // should be a rendered error the keyword checks below aren't matching.
+    // Dump anything that looks like a message so we can see its real wording.
+    logMessageRegions(loginHtml);
 
     if (loginLower.includes("temporarily locked")) {
       return {
