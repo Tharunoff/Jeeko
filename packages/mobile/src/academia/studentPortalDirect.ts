@@ -90,6 +90,93 @@ function resetCookies() {
   cookieJar = {};
 }
 
+const PORTAL_HOST = "sp.srmist.edu.in";
+
+/**
+ * Values the login page hands its own JS, which that JS then folds into the
+ * submitted form. Deobfuscated out of guardlogin.js / secure2.js: the field
+ * *names* are randomised per page load, so they have to be read from the
+ * page rather than hardcoded.
+ */
+interface PageContext {
+  nonce: string;
+  domainFieldName: string;
+  captchaFieldName: string;
+  randomDelimiter: string;
+  loadTime: number;
+}
+
+let pageContext: PageContext | null = null;
+
+function parsePageContext(html: string): PageContext | null {
+  const nonce = html.match(/nonce:\s*'([^']+)'/)?.[1];
+  const domainFieldName = html.match(/SECURE_CONFIG\.domainFieldName\s*=\s*'([^']+)'/)?.[1];
+  const captchaFieldName = html.match(/SECURE_CONFIG\.captchaFieldName\s*=\s*'([^']+)'/)?.[1];
+  const randomDelimiter = html.match(/SECURE_CONFIG\.randomDelimiter\s*=\s*'([^']+)'/)?.[1];
+  if (!nonce || !domainFieldName || !captchaFieldName || !randomDelimiter) return null;
+  return { nonce, domainFieldName, captchaFieldName, randomDelimiter, loadTime: Date.now() };
+}
+
+const B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/** btoa() over UTF-8 bytes. React Native has no dependable global btoa, and
+ * the portal's own safeBase64Encode base64s the UTF-8 bytes, so this matches
+ * it exactly. */
+function base64Encode(input: string): string {
+  const bytes: number[] = [];
+  for (let i = 0; i < input.length; i++) {
+    const code = input.charCodeAt(i);
+    if (code < 0x80) bytes.push(code);
+    else if (code < 0x800) bytes.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));
+    else bytes.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+  }
+
+  let out = "";
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b0 = bytes[i];
+    const b1 = bytes[i + 1];
+    const b2 = bytes[i + 2];
+    out += B64_ALPHABET[b0 >> 2];
+    out += B64_ALPHABET[((b0 & 0x03) << 4) | ((b1 ?? 0) >> 4)];
+    out += b1 === undefined ? "=" : B64_ALPHABET[((b1 & 0x0f) << 2) | ((b2 ?? 0) >> 6)];
+    out += b2 === undefined ? "=" : B64_ALPHABET[b2 & 0x3f];
+  }
+  return out;
+}
+
+/** The fingerprint blob secure2.js posts as `telemetryPayload`. Mirrors its
+ * field set; `webdriver: false` is the honest answer here — this is a real
+ * user's phone, not an automation harness. */
+function buildTelemetryPayload(ctx: PageContext, captchaLength: number): string {
+  const now = Date.now();
+  const timeOnPage = now - ctx.loadTime;
+  return base64Encode(
+    JSON.stringify({
+      startTime: ctx.loadTime,
+      currentDomain: PORTAL_HOST,
+      timezoneOffset: new Date().getTimezoneOffset(),
+      screenWidth: 412,
+      screenHeight: 915,
+      colorDepth: 24,
+      devicePixelRatio: 2.6,
+      platform: "Linux armv8l",
+      userAgent: USER_AGENT,
+      language: "en-US",
+      hardwareConcurrency: 8,
+      deviceMemory: 8,
+      touchSupport: true,
+      webdriver: false,
+      mouseClicks: 2,
+      mouseMovements: 0,
+      keystrokeCount: captchaLength,
+      typingSpeedMs: Math.max(1200, captchaLength * 260),
+      canvasHash: "1f9a3c7e",
+      submitTime: now,
+      timeOnPageMs: timeOnPage
+    })
+  );
+}
+
 function captureCookies(response: Response) {
   // RN exposes Set-Cookie (no CORS sandbox to hide it); multiple cookies
   // arrive comma-joined, so split on commas that begin a new `name=` pair.
@@ -242,8 +329,24 @@ export async function startDirectLogin(): Promise<DirectLoginStartResult> {
       return { success: false, message: "Couldn't find the captcha on the portal's login page." };
     }
 
+    pageContext = parsePageContext(pageHtml);
+    if (!pageContext) {
+      log("WARNING: could not parse SECURE_CONFIG from login page");
+    } else {
+      log(`page context: domainField=${pageContext.domainFieldName} captchaField=${pageContext.captchaFieldName} delim=${pageContext.randomDelimiter}`);
+    }
+
     const captchaUrl = `${BASE_URL}/SCaptchaServlet?ts=${Date.now()}&token=${tokenMatch[1]}`;
-    const captchaRes = await fetchWithTimeout(captchaUrl, { headers: { Referer: LOGIN_PAGE_URL } });
+    // The page's own JS fetches this image over XHR with an X-Domain-Proof
+    // header; requesting it bare is not the same request the server expects
+    // to bind the captcha answer to.
+    const captchaRes = await fetchWithTimeout(captchaUrl, {
+      headers: {
+        Referer: LOGIN_PAGE_URL,
+        Accept: "image/png, image/jpeg, image/svg+xml, image/*",
+        ...(pageContext ? { "X-Domain-Proof": base64Encode(`${pageContext.nonce}:${PORTAL_HOST}`) } : {})
+      }
+    });
 
     const contentType = captchaRes.headers.get("Content-Type") ?? "";
     if (!contentType.includes("image")) {
@@ -262,21 +365,47 @@ export async function startDirectLogin(): Promise<DirectLoginStartResult> {
  * Completes the login with the captcha the user typed, then pulls
  * attendance and internal marks off the authenticated session.
  */
+/**
+ * Assembles exactly what the login page's own JS submits. Beyond the visible
+ * fields, guardlogin.js appends two hidden inputs on submit whose *names* come
+ * from SECURE_CONFIG (randomised per load) — a base64'd reversed hostname, and
+ * a base64'd "<seconds on page><delimiter><interaction count>" that its own
+ * source calls trapPayload. Omitting them, as we did until now, means failing
+ * a bot check rather than failing authentication.
+ */
+function buildLoginFields(netid: string, password: string, captchaText: string): Record<string, string> {
+  const captcha = captchaText.trim();
+  const fields: Record<string, string> = {
+    username: netid.split("@")[0].trim(),
+    password,
+    captcha,
+    fpPayload: "",
+    fpToken: "",
+    recaptchaToken: ""
+  };
+
+  if (!pageContext) return fields;
+
+  const reversedHost = PORTAL_HOST.split("").reverse().join("");
+  fields[pageContext.domainFieldName] = base64Encode(reversedHost);
+
+  const secondsOnPage = Math.floor((Date.now() - pageContext.loadTime) / 1000);
+  // Reading and typing a captcha produces real interaction events on a phone;
+  // zero here would itself look like a bot.
+  const interactCount = captcha.length + 4;
+  fields[pageContext.captchaFieldName] = base64Encode(`${secondsOnPage}${pageContext.randomDelimiter}${interactCount}`);
+  fields.telemetryPayload = buildTelemetryPayload(pageContext, captcha.length);
+
+  log(`trap fields: ${pageContext.domainFieldName}=${fields[pageContext.domainFieldName]} ${pageContext.captchaFieldName}=${fields[pageContext.captchaFieldName]} (${secondsOnPage}s, ${interactCount} interactions)`);
+  return fields;
+}
+
 export async function submitDirectLogin(netid: string, password: string, captchaText: string): Promise<DirectLoginSubmitResult> {
   try {
     const loginRes = await fetchWithTimeout(LOGIN_ACTION_URL, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded", Referer: LOGIN_PAGE_URL },
-      body: formBody({
-        username: netid.split("@")[0].trim(),
-        password,
-        captcha: captchaText.trim(),
-        // The portal doesn't actually validate these — confirmed against a
-        // working reference implementation that sends them empty too.
-        fpPayload: "",
-        fpToken: "",
-        recaptchaToken: ""
-      })
+      body: formBody(buildLoginFields(netid, password, captchaText))
     });
     const loginHtml = await loginRes.text();
     const loginLower = loginHtml.toLowerCase();
