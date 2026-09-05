@@ -575,22 +575,6 @@ class AcademiaClient:
             response = self.session.get(url, headers=self._get_page_headers())
             response.raise_for_status()
 
-            # TEMP DIAGNOSTIC: /page/My_Attendance has 403'd ("Page inaccessible")
-            # on every request while this page and the timetable succeed on the
-            # exact same session — which is what Zoho Creator returns for a page
-            # name that doesn't resolve for this user's role, not a real
-            # permission block (the user can see attendance fine in a browser).
-            # Note the timetable's name carries an academic-year suffix
-            # (My_Time_Table_2023_24) while ours is a bare "My_Attendance", so
-            # the real page has very likely been renamed. This page is the
-            # portal's own nav, so it should name every page that actually
-            # exists for this account.
-            page_names = sorted(set(re.findall(r'/page/([A-Za-z0-9_]+)', response.text)))
-            print(f"[DIAG] Page names referenced by WELCOME: {page_names}")
-            for m in re.finditer(r'ttendance', response.text):
-                start = max(0, m.start() - 200)
-                print(f"[DIAG] ...attendance mention: {response.text[start:m.end() + 200]}")
-
             # Search for day order pattern in the response
             match = re.search(r'Day Order:\s*(\d+)', response.text)
 
