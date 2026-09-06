@@ -380,14 +380,16 @@ export async function startDirectLogin(): Promise<DirectLoginStartResult> {
  */
 function buildLoginFields(netid: string, password: string, captchaText: string): Record<string, string> {
   const typed = captchaText.trim();
-  // Decisive, zero-guess diagnostic: does the answer the user read off the
-  // image match the captchaText the page already handed us? If yes, the
-  // captcha is not our blocker; if no, captchaText is a decoy and image OCR
-  // is genuinely required.
-  const fromPage = pageContext?.captchaText ?? "(none)";
-  log(`captcha check: typed='${typed}' pageCaptchaText='${fromPage}' match=${typed.toLowerCase() === fromPage.toLowerCase()}`);
+  const fromPage = pageContext?.captchaText ?? null;
+  log(`captcha check: typed='${typed}' pageCaptchaText='${fromPage ?? "(none)"}' match=${!!fromPage && typed.toLowerCase() === fromPage.toLowerCase()}`);
 
-  const captcha = typed;
+  // Prefer the page's own captchaText over what the user read off the image.
+  // gradex.bond scrapes this same portal and never asks its users to solve a
+  // captcha at all — so the answer has to be derivable server-side, and it is
+  // sitting right here in SECURE_CONFIG. If this works the captcha prompt can
+  // go away entirely; if it doesn't, the log line above still tells us whether
+  // captchaText was ever the real answer.
+  const captcha = fromPage ?? typed;
   const fields: Record<string, string> = {
     username: netid.split("@")[0].trim(),
     password,
