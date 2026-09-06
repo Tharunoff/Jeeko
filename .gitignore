@@ -11,3 +11,8 @@ web-build/
 coverage/
 *.keystore
 credentials.json
+
+# Downloaded build artifacts — these are large (~123MB) and EAS copies
+# every non-ignored file into its upload tarball on each build.
+*.apk
+*.aab
