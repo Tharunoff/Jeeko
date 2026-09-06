@@ -105,8 +105,17 @@ interface PageContext {
   randomDelimiter: string;
   /** The captcha answer, sitting in the login page's own SECURE_CONFIG. If
    * this equals the rendered image, the captcha is theatre and the real gate
-   * is the trap fields — and we can drop the human-read step entirely. */
+   * is the trap fields — and we can drop the human-read step entirely.
+   * (Confirmed a DECOY by direct comparison: page said 'N2Bj5q', image showed
+   * 'z6z45b'. Kept only for the diagnostic log.) */
   captchaText: string | null;
+  /** Name of the honeypot field (random `ph_<hex>` per load). It's an
+   * off-screen, aria-hidden, tabindex=-1 text input — its own HTML comment
+   * says "hides the field visually from humans / appears as normal text to
+   * bots". A real browser submits it EMPTY; a captured working login includes
+   * it empty too. We were omitting it entirely, which reads to the server as
+   * "didn't render the real form" — the likely reason every attempt bounced. */
+  honeypotFieldName: string | null;
   loadTime: number;
 }
 
@@ -118,8 +127,9 @@ function parsePageContext(html: string): PageContext | null {
   const captchaFieldName = html.match(/SECURE_CONFIG\.captchaFieldName\s*=\s*'([^']+)'/)?.[1];
   const randomDelimiter = html.match(/SECURE_CONFIG\.randomDelimiter\s*=\s*'([^']+)'/)?.[1];
   const captchaText = html.match(/SECURE_CONFIG\.captchaText\s*=\s*'([^']+)'/)?.[1] ?? null;
+  const honeypotFieldName = html.match(/name="(ph_[a-z0-9]+)"/i)?.[1] ?? null;
   if (!nonce || !domainFieldName || !captchaFieldName || !randomDelimiter) return null;
-  return { nonce, domainFieldName, captchaFieldName, randomDelimiter, captchaText, loadTime: Date.now() };
+  return { nonce, domainFieldName, captchaFieldName, randomDelimiter, captchaText, honeypotFieldName, loadTime: Date.now() };
 }
 
 const B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -367,58 +377,68 @@ export async function startDirectLogin(): Promise<DirectLoginStartResult> {
 }
 
 /**
- * Completes the login with the captcha the user typed, then pulls
- * attendance and internal marks off the authenticated session.
+ * Assembles exactly what a real browser submits, in the same field order —
+ * reconstructed from a captured working login plus the deobfuscated page JS.
+ * Beyond the visible fields the form carries:
+ *  - an empty honeypot `ph_<hex>` (off-screen; server checks it came back empty)
+ *  - `dtoken_<hex>` = base64(reversed hostname), appended TWICE (guardlogin.js
+ *    and guardloginbottom.js each add it)
+ *  - `cptoken_<hex>` = base64("<seconds on page><delimiter><interactions>"),
+ *    which the page's own source calls trapPayload
+ *  - `telemetryPayload` = base64 fingerprint blob (secure2.js)
+ * A working login sends the honeypot empty and dtoken duplicated; we were
+ * doing neither.
  */
-/**
- * Assembles exactly what the login page's own JS submits. Beyond the visible
- * fields, guardlogin.js appends two hidden inputs on submit whose *names* come
- * from SECURE_CONFIG (randomised per load) — a base64'd reversed hostname, and
- * a base64'd "<seconds on page><delimiter><interaction count>" that its own
- * source calls trapPayload. Omitting them, as we did until now, means failing
- * a bot check rather than failing authentication.
- */
-function buildLoginFields(netid: string, password: string, captchaText: string): Record<string, string> {
-  const typed = captchaText.trim();
-  // Decisive, zero-guess diagnostic: does the answer the user read off the
-  // image match the captchaText the page already handed us? If yes, the
-  // captcha is not our blocker; if no, captchaText is a decoy and image OCR
-  // is genuinely required.
-  const fromPage = pageContext?.captchaText ?? "(none)";
-  log(`captcha check: typed='${typed}' pageCaptchaText='${fromPage}' match=${typed.toLowerCase() === fromPage.toLowerCase()}`);
+function buildLoginFields(netid: string, password: string, captchaText: string): string {
+  const captcha = captchaText.trim();
+  const parts: [string, string][] = [
+    ["username", netid.split("@")[0].trim()],
+    ["password", password]
+  ];
 
-  const captcha = typed;
-  const fields: Record<string, string> = {
-    username: netid.split("@")[0].trim(),
-    password,
-    captcha,
-    fpPayload: "",
-    fpToken: "",
-    recaptchaToken: ""
-  };
+  if (!pageContext) {
+    parts.push(["captcha", captcha], ["fpPayload", ""], ["fpToken", ""], ["recaptchaToken", ""]);
+    return parts.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&");
+  }
 
-  if (!pageContext) return fields;
-
+  const ctx = pageContext;
   const reversedHost = PORTAL_HOST.split("").reverse().join("");
-  fields[pageContext.domainFieldName] = base64Encode(reversedHost);
-
-  const secondsOnPage = Math.floor((Date.now() - pageContext.loadTime) / 1000);
+  const dtoken = base64Encode(reversedHost);
+  const secondsOnPage = Math.floor((Date.now() - ctx.loadTime) / 1000);
   // Reading and typing a captcha produces real interaction events on a phone;
   // zero here would itself look like a bot.
   const interactCount = captcha.length + 4;
-  fields[pageContext.captchaFieldName] = base64Encode(`${secondsOnPage}${pageContext.randomDelimiter}${interactCount}`);
-  fields.telemetryPayload = buildTelemetryPayload(pageContext, captcha.length);
+  const cptoken = base64Encode(`${secondsOnPage}${ctx.randomDelimiter}${interactCount}`);
 
-  log(`trap fields: ${pageContext.domainFieldName}=${fields[pageContext.domainFieldName]} ${pageContext.captchaFieldName}=${fields[pageContext.captchaFieldName]} (${secondsOnPage}s, ${interactCount} interactions)`);
-  return fields;
+  // Honeypot present-and-empty is the newly-found missing piece.
+  if (ctx.honeypotFieldName) parts.push([ctx.honeypotFieldName, ""]);
+  parts.push(
+    ["captcha", captcha],
+    ["fpPayload", ""],
+    ["fpToken", ""],
+    ["telemetryPayload", buildTelemetryPayload(ctx, captcha.length)],
+    [ctx.domainFieldName, dtoken],
+    [ctx.captchaFieldName, cptoken],
+    // guardloginbottom.js appends dtoken a second time; the working capture
+    // shows the duplicate, so mirror it.
+    [ctx.domainFieldName, dtoken]
+  );
+
+  log(`fields: honeypot=${ctx.honeypotFieldName ?? "MISSING"} ${ctx.domainFieldName}=${dtoken} ${ctx.captchaFieldName}=${cptoken} (${secondsOnPage}s, ${interactCount} interactions)`);
+  return parts.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&");
 }
+
+/**
+ * Completes the login with the captcha the user typed, then pulls
+ * attendance and internal marks off the authenticated session.
+ */
 
 export async function submitDirectLogin(netid: string, password: string, captchaText: string): Promise<DirectLoginSubmitResult> {
   try {
     const loginRes = await fetchWithTimeout(LOGIN_ACTION_URL, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded", Referer: LOGIN_PAGE_URL },
-      body: formBody(buildLoginFields(netid, password, captchaText))
+      body: buildLoginFields(netid, password, captchaText)
     });
     const loginHtml = await loginRes.text();
     const loginLower = loginHtml.toLowerCase();
