@@ -592,14 +592,21 @@ function parseAttendance(tables: string[][][]): StudentPortalResult["attendance"
     const hasHours = header.some((c) => c.includes("hour") || c.includes("conduct") || c.includes("attend"));
     if (!hasCourse || !hasHours) continue;
 
+    // Real Student Portal columns (confirmed against the live page):
+    //   Code | Description | Max. hours | Att. hours | Absent hours | Total Percentage
+    // "conducted" is Max. hours, NOT "Total Percentage" (which also contains
+    // the word "total"); the percentage is "Total Percentage", NOT "Att.
+    // hours" (which contains "att"). Match the specific headers, most-specific
+    // first, so those collisions can't happen.
     const codeIdx = Math.max(0, findColumn(header, "code"));
-    const titleIdx = findColumn(header, "title", "desc", "name");
-    const typeIdx = findColumn(header, "type", "category");
+    const titleIdx = findColumn(header, "desc", "title", "name");
+    const typeIdx = findColumn(header, "category", "type");
     const facultyIdx = findColumn(header, "faculty", "staff");
     const slotIdx = findColumn(header, "slot");
-    const conductedIdx = findColumn(header, "conduct", "total");
+    const conductedIdx = findColumn(header, "max", "conduct");
+    const attendedIdx = findColumn(header, "att.", "att ", "present", "attend");
     const absentIdx = findColumn(header, "absent");
-    const pctIdx = findColumn(header, "%", "percent", "att");
+    const pctIdx = findColumn(header, "percent", "%");
 
     for (const row of table.slice(1)) {
       const courseCode = row[codeIdx];
@@ -607,11 +614,12 @@ function parseAttendance(tables: string[][][]): StudentPortalResult["attendance"
 
       const conducted = conductedIdx >= 0 ? toInt(row[conductedIdx]) : 0;
       const absent = absentIdx >= 0 ? toInt(row[absentIdx]) : 0;
+      const attended = attendedIdx >= 0 ? toInt(row[attendedIdx]) : Math.max(0, conducted - absent);
 
       let percentage = 0;
       const rawPct = pctIdx >= 0 ? row[pctIdx]?.match(/(\d+(?:\.\d+)?)/) : null;
       if (rawPct) percentage = parseFloat(rawPct[1]);
-      else if (conducted > 0) percentage = Math.round(((conducted - absent) / conducted) * 10000) / 100;
+      else if (conducted > 0) percentage = Math.round((attended / conducted) * 10000) / 100;
 
       totalConducted += conducted;
       totalAbsent += absent;

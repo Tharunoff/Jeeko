@@ -32,6 +32,30 @@ function attendanceColor(pct: number): string {
   return Colors.success;
 }
 
+const THRESHOLD = 0.75;
+
+/**
+ * The bunk calculator. Given hours conducted and absent (so attended =
+ * conducted − absent):
+ *  - margin: how many more classes you can skip and stay ≥75% (when ≥75%)
+ *  - required: how many you must attend in a row to reach 75% (when <75%)
+ * Both derived from attended/(conducted+x) ≥ 0.75.
+ */
+function bunkStats(conducted: number, absent: number): { label: string; tone: string } | null {
+  if (!conducted || conducted <= 0) return null;
+  const attended = Math.max(0, conducted - absent);
+  const pct = attended / conducted;
+
+  if (pct >= THRESHOLD) {
+    const margin = Math.floor(attended / THRESHOLD) - conducted;
+    if (margin <= 0) return { label: "On the edge — don't miss the next class", tone: Colors.warning };
+    return { label: `Can miss ${margin} more`, tone: Colors.success };
+  }
+
+  const required = Math.ceil(3 * conducted - 4 * attended); // solves (att+x)/(cond+x) ≥ 0.75
+  return { label: `Attend ${required} more to reach 75%`, tone: Colors.danger };
+}
+
 function formatSyncedWhen(dateKey: string, today: string): string {
   if (dateKey === today) return "Synced today";
   const [y, m, d] = dateKey.split("-").map(Number);
@@ -245,24 +269,30 @@ export function AttendanceScreen({ onOpenSettings }: { onOpenSettings: () => voi
                 <>
                   <Text style={styles.sectionLabel}>BY COURSE</Text>
                   <View style={styles.courseCard}>
-                    {snapshot.attendanceByCourse.map((c, i) => (
-                      <View key={`${c.title}_${i}`}>
-                        {i > 0 && <View style={styles.separator} />}
-                        <View style={styles.courseRow}>
-                          <View style={{ flex: 1 }}>
-                            <Text style={styles.courseTitle} numberOfLines={1}>
-                              {c.title}
-                            </Text>
-                            <Text style={styles.courseMeta}>
-                              {c.hoursConducted} conducted · {c.hoursAbsent} absent
+                    {snapshot.attendanceByCourse.map((c, i) => {
+                      const bunk = bunkStats(c.hoursConducted, c.hoursAbsent);
+                      return (
+                        <View key={`${c.title}_${i}`}>
+                          {i > 0 && <View style={styles.separator} />}
+                          <View style={styles.courseRow}>
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.courseTitle} numberOfLines={1}>
+                                {c.title}
+                              </Text>
+                              <Text style={styles.courseMeta}>
+                                {c.hoursConducted} conducted · {c.hoursAbsent} absent
+                              </Text>
+                              {bunk && (
+                                <Text style={[styles.bunkText, { color: bunk.tone }]}>{bunk.label}</Text>
+                              )}
+                            </View>
+                            <Text style={[styles.coursePct, { color: attendanceColor(c.attendancePercent) }]}>
+                              {c.attendancePercent}%
                             </Text>
                           </View>
-                          <Text style={[styles.coursePct, { color: attendanceColor(c.attendancePercent) }]}>
-                            {c.attendancePercent}%
-                          </Text>
                         </View>
-                      </View>
-                    ))}
+                      );
+                    })}
                   </View>
                 </>
               )}
@@ -395,6 +425,7 @@ const styles = StyleSheet.create({
   courseTitle: { color: Colors.textPrimary, fontSize: 15, fontWeight: "600" },
   courseMeta: { color: Colors.textMuted, fontSize: 12, marginTop: 3 },
   coursePct: { fontSize: 17, fontWeight: "700", fontVariant: ["tabular-nums"] },
+  bunkText: { fontSize: 12, fontWeight: "600", marginTop: 4 },
 
   modalBackdrop: {
     flex: 1,
