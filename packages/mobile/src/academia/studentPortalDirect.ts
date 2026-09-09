@@ -435,9 +435,24 @@ function buildLoginFields(netid: string, password: string, captchaText: string):
 
 export async function submitDirectLogin(netid: string, password: string, captchaText: string): Promise<DirectLoginSubmitResult> {
   try {
+    log(`submitting captcha the user typed: '${captchaText.trim()}' (page decoy captchaText='${pageContext?.captchaText ?? "?"}')`);
     const loginRes = await fetchWithTimeout(LOGIN_ACTION_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded", Referer: LOGIN_PAGE_URL },
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Referer: LOGIN_PAGE_URL,
+        // A real browser's form POST carries these; the app/WAF plausibly
+        // checks Origin for a state-changing request. We were sending none of
+        // them — the one untested surface now that the body matches a working
+        // login field-for-field.
+        Origin: "https://sp.srmist.edu.in",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+        "Cache-Control": "max-age=0"
+      },
       body: buildLoginFields(netid, password, captchaText)
     });
     const loginHtml = await loginRes.text();
